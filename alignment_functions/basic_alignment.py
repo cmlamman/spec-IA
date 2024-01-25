@@ -5,7 +5,7 @@ cosmo = LambdaCDM(H0=69.6, Om0=0.286, Ode0=0.714)
 from astropy.table import Table, vstack
 from astropy.coordinates import SkyCoord
 from astropy import units as u
-from ..geometry_functions.coordinate_functions import *
+from geometry_functions.coordinate_functions import *
 
 import time, glob
 
@@ -48,7 +48,7 @@ def projected_separation_ra_dec(ra1, dec1, x1, y1, z1, ra2, dec2, x2, y2, z2):
 
     return projected_separation
 
-def get_proj_dist(cat1, cat2, pos_obs=np.asarray([-3700, 0, 0])*.7):
+def get_proj_dist_abacus(cat1, cat2, pos_obs=np.asarray([-3700, 0, 0])*.7):
     '''
     Returns transverse projected distance of two cartesian positions given observer position. 
     Input:
@@ -186,5 +186,39 @@ def get_rel_es(catalog, indices, data_weights=None, weights=None, rcolor='rw1', 
         # combining weights of centers and neighbors
         all_ws = centers_m['WEIGHT_SYS'] * centers_m['WEIGHT_ZFAIL'] * neighbors_m['WEIGHT_SYS'] * neighbors_m['WEIGHT_ZFAIL']
         return e1_re, e2_rel, all_ws
+    
+    
+    
+def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, pimax = 20, max_proj_sep = 30, max_neighbors=100):
+    '''ang and loc tracers are 3d points. ang_values are orientation angles of ang_tracers'''
+    # make tree
+    tree = cKDTree(loc_tracers)
+    # find neighbors
+    dd, ii = tree.query(ang_tracers, k=max_neighbors, distance_upper_bound=np.sqrt(max_proj_sep**2 + pimax**2))
+    
+    # add placeholder row to loc_tracers
+    loc_tracers = np.vstack((loc_tracers, np.full(len(loc_tracers[0]), np.inf)))
+    
+    center_coords = ang_tracers[np.repeat(range(len(ang_tracers)), max_neighbors).ravel()]
+    center_angles = ang_values[np.repeat(range(len(ang_tracers)), max_neighbors).ravel()]
+    neighbor_coords = loc_tracers[ii.ravel()]
+    
+    dist_to_orgin_loc = np.sqrt(np.sum(neighbor_coords**2, axis=1))
+    dist_to_orgin_ang = np.sqrt(np.sum(center_coords**2, axis=1))
+    los_sep = np.abs(dist_to_orgin_loc - dist_to_orgin_ang)
+    
+    proj_dist = np.abs(get_proj_dist(center_coords, neighbor_coords))
+    
+    pairs_to_keep = (los_sep < pimax) & (proj_dist < max_proj_sep)
+    center_coords = center_coords[pairs_to_keep]
+    neighbor_coords = neighbor_coords[pairs_to_keep]
+    
+    # calculate projected position angle
+    position_angle = get_orientation_angle_cartesian(center_coords, neighbor_coords)
+    
+    pa_rel = center_angles[pairs_to_keep] - position_angle
+    
+    
+    return proj_dist[pairs_to_keep], pa_rel
 
 ################################################################
