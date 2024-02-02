@@ -6,6 +6,7 @@ from astropy.table import Table, vstack
 from astropy.coordinates import SkyCoord
 from astropy import units as u
 from geometry_functions.coordinate_functions import *
+from alignment_functions.general_stats import bin_sum_not_scipy
 
 import time, glob
 
@@ -220,5 +221,55 @@ def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, pimax = 20
     
     
     return proj_dist[pairs_to_keep], pa_rel
+
+
+# calculate relative angles in seprate regions and returned binned results
+
+def rel_angle_regions(ang_tracers, ang_values, loc_tracers, n_regions = 4, pimax = 20, max_proj_sep = 30, max_neighbors=100):
+    '''divide the angle catalog into n_regions, calculate cos(2*theta) the angles relative to the tracers, and return the results from each region'''
+    
+    # sort ang_tracers and ang_values by z (i.e. DEC)
+    sorter = np.argsort(ang_tracers[:,2])
+    ang_tracers = ang_tracers[sorter]
+    ang_values = ang_values[sorter]
+    
+    # divide catalogs into regions
+    n_in_region = int((len(ang_tracers) / n_regions)+1)
+    j = 0 
+    k = n_in_region
+    
+    all_proj_dists = []
+    all_pa_rels = []
+    for i in range(n_in_region):
+        if k > len(ang_tracers):
+            k = len(ang_tracers)
+        if len(ang_tracers[j:k]) == 0:
+            continue
+        proj_dist, pa_rel = calculate_rel_ang_cartesian(ang_tracers[j:k], ang_values[j:k], loc_tracers, pimax, max_proj_sep, max_neighbors)
+        all_proj_dists.append(proj_dist)
+        all_pa_rels.append(np.cos(2*pa_rel))
+        j += n_in_region
+        k += n_in_region
+    return all_proj_dists, all_pa_rels
+
+
+def bin_region_results(all_proj_dists, all_pa_rels, nbins=20, log_bins=False):
+    '''bin the results from rel_angle_regions'''
+    
+    if log_bins==True:
+        sep_bins = np.logspace(0, np.log10(np.max(all_proj_dists[0])), nbins+1)   
+    elif log_bins==False:
+        sep_bins = np.linspace(0.1, np.max(all_proj_dists[0]), nbins+1)
+    
+    all_binned_pa_rels = []
+    pa_rels_e = []
+    for i in range(len(all_proj_dists)):
+        
+        binned_pa_rels, binned_pa_rels_e = bin_sum_not_scipy(all_proj_dists[i], all_pa_rels[i], sep_bins, statistic='mean', err=True)
+        all_binned_pa_rels.append(binned_pa_rels)
+        pa_rels_e.append(binned_pa_rels_e)
+        
+    return sep_bins, all_binned_pa_rels, pa_rels_e
+    
 
 ################################################################

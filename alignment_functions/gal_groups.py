@@ -86,27 +86,33 @@ def find_groups_UnionFind(points, max_n=10, transverse_max = 0.5, los_max = 6):
     
     return group_results
     
-# remove groups that have an outside object within group_sep_min
-def remove_close_groups(points, group_result, group_transverseSep_min=10, max_n=10, los_max=100):
-    # find the center coordinates of each group
-    group_centers = np.array([np.mean(points[group], axis=0) for group in group_result])
+# remove groups that have an outside object within group_sep_min of any of their members
+def get_isolated_groups(points, group_result, group_transverseSep_min=10, group_losSep_min=12):
     
     # build the tree of all galaxies
     point_tree = cKDTree(points)
-    
-    # find neighbors of each group center
-    dd, ii = point_tree.query(group_centers, k=max_n+1, distance_upper_bound=np.sqrt(group_transverseSep_min**2 + los_max**2))
-    
-    # add row of infinite values to points
+     # add row of infinite values to points for later
     points = np.vstack((points, np.full(len(points[0]), np.inf)))
-    # for each line in ii, if an index is in the corresponding line of the group_result, then replace it with the length of points
-    ii = np.array([[len(points)-1 if idx in group else idx for idx in line] for group, line in zip(group_result, ii)])
-    # find the transverse separation between each group center and its neighbors
-    transverse_seps = np.array([np.abs(get_proj_dist(points[ii[i]], group_centers[i])) for i in range(len(group_result))])
     
-    sufficiently_isolated = (np.nanmin(transverse_seps, axis=1) > group_transverseSep_min)
+    groups_to_keep = []
     
-    return [group_result[i] for i in range(len(group_result)) if sufficiently_isolated[i]]
+    for g in group_result:
+        
+        # find nearest non-group neighbor of each group member
+        dd, ii = point_tree.query(points[g], k=len(g)+1)
+        # remove the group members from the list of neighbors
+    
+        # find the neighbor that's not in the group
+        i_outside = np.array([np.where(~np.isin(ii[i], g))[0][0] for i in range(len(g))])
+    
+        # find the transverse separation between each group member and its nearest non-group neighbor
+        transverse_seps = np.array(np.abs(get_proj_dist(points[i_outside], points[g])))
+        los_seps = np.array(np.abs(np.sqrt(np.sum(points[i_outside]**2, axis=1)) - np.sqrt(np.sum(points[g]**2, axis=1))))
+        
+        if (np.nanmin(transverse_seps) > group_transverseSep_min) & (np.nanmin(los_seps) > group_losSep_min):
+            groups_to_keep.append(g)
+    
+    return groups_to_keep
     
     
 ###############################################

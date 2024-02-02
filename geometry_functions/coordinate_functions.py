@@ -212,5 +212,4 @@ def get_orientation_angle_cartesian(points1, points2, los_location=np.asarray([0
     points1_proj = np.asarray([np.sum(points1*perp_vector, axis=1), np.sum(points1*perp_vector2, axis=1)]).T
     points2_proj = np.asarray([np.sum(points2*perp_vector, axis=1), np.sum(points2*perp_vector2, axis=1)]).T
     
-    print(np.shape(points1_proj))
     return np.arctan2((points2_proj[:,0]-points1_proj[:,0]), (points2_proj[:,1]-points1_proj[:,1]))

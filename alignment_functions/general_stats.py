@@ -22,8 +22,8 @@ def bin_sum_not_scipy(x_values, y_values, x_bins, statistic='sum', err=False):
         y_errs = []
         for ind in range(len(x_bins)-1):
             y_bin = y_values[(inds==(ind+1))]
-            y_sums.append(np.sum(y_bin))#; y_std.append(np.std(y_bin))
-            y_errs.append(np.std(y_bin) / np.sqrt(len(y_bin)))
+            y_sums.append(np.nansum(y_bin))#; y_std.append(np.std(y_bin))
+            y_errs.append(np.nanstd(y_bin) / np.sqrt(len(y_bin)))
         if err==True:
             return np.asarray(remove_astropyu(y_sums)), np.asarray(remove_astropyu(y_errs))
         else:
@@ -40,3 +40,19 @@ def bin_sum_not_scipy(x_values, y_values, x_bins, statistic='sum', err=False):
             return np.asarray(remove_astropyu(y_sums)), np.asarray(remove_astropyu(y_errs))
         else:
             return np.asarray(remove_astropyu(y_sums))
+        
+def get_cov_matrix_from_regions(signal_regions):
+    '''signa_regions is array of shape (n_regions, n_bins)'''
+    
+    cv = signal_regions.T
+    cn = len(cv)
+    cv_kk = np.zeros(cn**2).reshape((cn, cn))
+    epsilon = 1e-10  # small epsilon value to avoid division by zero
+    for i in range(len(cv)):
+        for j in range(len(cv)):
+            cv_i = np.sum(cv[i] * cv[i])
+            cv_j = np.sum(cv[j] * cv[j])
+            cv_kk[i][j] = np.sum(cv[i] * cv[j]) / np.sqrt((cv_i + epsilon) * (cv_j + epsilon))
+    
+    return cv_kk
+    
