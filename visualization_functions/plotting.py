@@ -83,7 +83,7 @@ def four_plot(x, y, c):
     '''plot 4 copies of the same plot, with different x and y signs'''
     return [x, x, -x, -x], [y, -y, y, -y], [c,c,c,c]
 
-def reflect4(rp_bins, rpar_bins, matrix):
+def get_combined_quad_plot(matrix, rp_bins, rpar_bins):
     plot_quad = np.concatenate((np.flipud(matrix), matrix), axis=0)
     plot_quad = np.concatenate((np.fliplr(plot_quad), plot_quad), axis=1)
     rp_bins_quad =  np.concatenate([-np.flipud(rp_bins), rp_bins])
@@ -111,3 +111,4 @@ def plot_quad_reflect(rp_bins, rpar_bins, matrix, plot_args = {'cmap':'BuPu', 'l
     plt.title(title)
     if save_name!=False:
         fig.savefig('/pscratch/sd/c/clamman/plots_to_download/'+save_name+'.png', dpi=400, bbox_inches='tight')
+        
