@@ -10,6 +10,7 @@ from astropy.cosmology import LambdaCDM, z_at_value
 
 cosmo = LambdaCDM(H0=69.6, Om0=0.286, Ode0=0.714)
 def rw1_to_z(rw1):
+    # rough photometric relation from DESI SV
     return rw1*0.2443683701202549+0.0037087929968548927
 def comoving_to_z(d_comoving): # in units of Mpc/h
     return z_at_value(cosmo.comoving_distance, d_comoving * 0.7 * u.Mpc)
@@ -32,27 +33,15 @@ def rad_to_deg(ang_rad):
 def deg_to_rad(ang_deg):
     return ang_deg * np.pi / 180
 
+def remove_astropyu(values_list, unit=u.Mpc):
+    if isinstance(values_list[0], u.Quantity):
+        return [v.to(u.Mpc).value for v in values_list]
+    else:
+        return values_list
 
-#################################################################
-## functions to limit a table of objects to only those within a given boundary
-
-def limit_region(targets, ra1=200., ra2=205., dec1=0., dec2=5.):
-    '''input targets [astropy table] and ra/dec limits'''
-    try:
-        return targets[(targets['RA']>ra1)&(targets['RA']<ra2)&(targets['DEC']>dec1)&(targets['DEC']<dec2)]
-    except KeyError:
-        return targets[(targets['TARGET_RA']>ra1)&(targets['TARGET_RA']<ra2)&(targets['TARGET_DEC']>dec1)&(targets['TARGET_DEC']<dec2)]
-
-def radial_region(targets, ra, dec, r):
-    '''limit to region within r [deg] of given coords [deg]'''
-    return targets[(get_sep(ra, dec, targets['RA'], targets['DEC'])<r)]
-
-def donut_region(targets, ra, dec, r_min, r_max):
-    '''limit to region within r [deg] of given coords [deg]'''
-    seps = get_sep(ra, dec, targets['RA'], targets['DEC'])
-    return targets[(seps<=r_max) & (seps>r_min)]
-
-#################################################################
+###########################################################################################################
+# CALCULATING RELATIVE SEPARATIONS AND ANGLES
+###########################################################################################################
 
 def get_sep(ra1, dec1, ra2, dec2, u_coords='deg', u_result=u.rad):
     '''
@@ -127,10 +116,15 @@ def get_cosmo_psep_pa(ra1, dec1, ra2, dec2, z1, z2, u_coords='deg'):
     return psep, pa
 
 
-def get_proj_dist(pos1, pos2, pos_obs=np.asarray([0, 0, 0])*.7):
+def get_proj_dist(pos1, pos2, pos_obs=np.asarray([0, 0, 0])*.7, use_cat=False):
     '''return transverse projected distance of two positions given observer position. returns in same units as given. default is Mpc/h'''
-    pos_diff = pos2 - pos1
-    pos_mid = .5 * (pos2 + pos1)
+    
+    if use_cat==False:
+        pos_diff = pos2 - pos1
+        pos_mid = .5 * (pos2 + pos1)
+    elif use_cat==True:
+        pos_diff = pos2['x_L2com'] - pos1['x_L2com']
+        pos_mid = .5 * (pos2['x_L2com'] + pos1['x_L2com'])
     obs_vec = pos_mid - pos_obs
     
     # project separation vector between objects onto LOS vector
@@ -213,3 +207,60 @@ def get_orientation_angle_cartesian(points1, points2, los_location=np.asarray([0
     points2_proj = np.asarray([np.sum(points2*perp_vector, axis=1), np.sum(points2*perp_vector2, axis=1)]).T
     
     return np.arctan2((points2_proj[:,0]-points1_proj[:,0]), (points2_proj[:,1]-points1_proj[:,1]))
+
+
+def projected_separation_ra_dec(ra1, dec1, x1, y1, z1, ra2, dec2, x2, y2, z2):  # from chatgpt...
+    '''
+    Calculate the projected physical separation between two points on the sky, given cartesian positions and their RA / DEC.
+    Returns physical separation in same units as input cartesian positions.
+    '''
+    
+    # Convert RA and DEC from degrees to radians
+    ra1_rad = np.deg2rad(ra1)
+    dec1_rad = np.deg2rad(dec1)
+    ra2_rad = np.deg2rad(ra2)
+    dec2_rad = np.deg2rad(dec2)
+
+    # Calculate the unit vectors for the two points
+    unit_vector1 = np.array([np.cos(ra1_rad) * np.cos(dec1_rad), np.sin(ra1_rad) * np.cos(dec1_rad), np.sin(dec1_rad)])
+    unit_vector2 = np.array([np.cos(ra2_rad) * np.cos(dec2_rad), np.sin(ra2_rad) * np.cos(dec2_rad), np.sin(dec2_rad)])
+
+    # Calculate the Cartesian separation along the line of sight (LOS)
+    delta_x = x2 - x1
+    delta_y = y2 - y1
+    delta_z = z2 - z1
+
+    # Calculate the projected separation in the plane of the sky
+    projected_separation = np.sqrt((delta_x - (np.dot([delta_x, delta_y, delta_z], unit_vector1) * unit_vector1[0]))**2 + \
+                                   (delta_y - (np.dot([delta_x, delta_y, delta_z], unit_vector1) * unit_vector1[1]))**2)
+
+    return projected_separation
+
+def get_pair_distances(catalog, indices, pos_obs=np.asarray([-3700, 0, 0])*.7, cartesian=False):
+    '''pos_obs in Mpc/h'''
+    # indices in catalog of centers and neighbors, arranges so each array is same shape
+    ci = np.repeat(indices[:,0], (len(indices[0])-1)).ravel() # indices of centers
+    ni = indices[:,1:].ravel()   # indices of neighbors
+    
+    # removing places where no neighbor was found in the tree
+    neighbor_exists = (ni!=len(catalog))
+    ci = ci[neighbor_exists]; ni = ni[neighbor_exists]
+    
+    centers_m = catalog[ci]
+    neighbors_m = catalog[ni]   # excluding the centers
+    
+    #r_projected = projected_separation_ra_dec(centers_m['RA'], centers_m['DEC'], centers_m['x_L2com'][::,0], centers_m['x_L2com'][::,1], centers_m['x_L2com'][::,2], 
+    #                                          neighbors_m['RA'], neighbors_m['DEC'], neighbors_m['x_L2com'][::,0], neighbors_m['x_L2com'][::,1], neighbors_m['x_L2com'][::,2])
+    if cartesian==False:
+        
+        r_parallel = (np.abs(cosmo.comoving_distance(centers_m['Z_noRSD']) - cosmo.comoving_distance(neighbors_m['Z_noRSD'])) * 0.7 / u.Mpc).value
+        s_parallel = (np.abs(cosmo.comoving_distance(centers_m['Z_withRSD']) - cosmo.comoving_distance(neighbors_m['Z_withRSD'])) * 0.7 / u.Mpc).value
+        
+        r_projected = get_proj_dist(centers_m, neighbors_m, pos_obs, use_cat=True)
+
+        return r_projected, r_parallel, s_parallel
+    
+    elif cartesian==True:
+        deltax = np.abs(centers_m['x_L2com'][::,0] - neighbors_m['x_L2com'][::,0])
+        deltayz = np.sqrt((centers_m['x_L2com'][::,1] - neighbors_m['x_L2com'][::,1])**2 + (centers_m['x_L2com'][::,2] - neighbors_m['x_L2com'][::,2])**2)
+        return deltax, deltayz

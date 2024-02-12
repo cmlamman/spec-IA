@@ -186,8 +186,12 @@ def get_rel_es(catalog, indices, data_weights=None, weights=None, rcolor='rw1', 
     elif data_weights is not None:
         # combining weights of centers and neighbors
         all_ws = centers_m['WEIGHT_SYS'] * centers_m['WEIGHT_ZFAIL'] * neighbors_m['WEIGHT_SYS'] * neighbors_m['WEIGHT_ZFAIL']
-        return e1_re, e2_rel, all_ws
-    
+        if return_sep==True:
+            psep = get_psep(centers_m['RA'], centers_m['DEC'], neighbors_m['RA'], neighbors_m['DEC'], u_coords='deg', u_result=u.deg)
+            psep_mpc = get_Mpc_h(psep, centers_m['Z'])  # in units of Mpc / h
+            return e1_re, e2_rel, all_ws, psep_mpc
+        elif return_sep==False:
+            return e1_re, e2_rel, all_ws
     
     
 def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, pimax = 20, max_proj_sep = 30, max_neighbors=100):
