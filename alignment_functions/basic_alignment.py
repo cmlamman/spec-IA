@@ -6,7 +6,7 @@ from astropy.table import Table, vstack
 from astropy.coordinates import SkyCoord
 from astropy import units as u
 from geometry_functions.coordinate_functions import *
-from alignment_functions.general_stats import bin_sum_not_scipy
+from alignment_functions.general_stats import bin_sum_not_scipy, bin_results
 
 import time, glob
 
@@ -194,7 +194,7 @@ def get_rel_es(catalog, indices, data_weights=None, weights=None, rcolor='rw1', 
             return e1_re, e2_rel, all_ws
     
     
-def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, pimax = 20, max_proj_sep = 30, max_neighbors=100):
+def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, loc_weights=None, pimax = 20, max_proj_sep = 30, max_neighbors=100):
     '''ang and loc tracers are 3d points. ang_values are orientation angles of ang_tracers'''
     # make tree
     tree = cKDTree(loc_tracers)
@@ -203,6 +203,7 @@ def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, pimax = 20
     
     # add placeholder row to loc_tracers
     loc_tracers = np.vstack((loc_tracers, np.full(len(loc_tracers[0]), np.inf)))
+    loc_weights = np.append(loc_weights, 0)
     
     center_coords = ang_tracers[np.repeat(range(len(ang_tracers)), max_neighbors).ravel()]
     center_angles = ang_values[np.repeat(range(len(ang_tracers)), max_neighbors).ravel()]
@@ -223,41 +224,77 @@ def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, pimax = 20
     
     pa_rel = center_angles[pairs_to_keep] - position_angle
     
+    if loc_weights is None:
+        return proj_dist[pairs_to_keep], pa_rel
     
-    return proj_dist[pairs_to_keep], pa_rel
+    elif loc_weights is not None:
+        return proj_dist[pairs_to_keep], pa_rel, loc_weights[ii.ravel()][pairs_to_keep]
 
 
 # calculate relative angles in seprate regions and returned binned results
 
-def rel_angle_regions(ang_tracers, ang_values, loc_tracers, n_regions = 4, pimax = 20, max_proj_sep = 30, max_neighbors=100):
-    '''divide the angle catalog into n_regions, calculate cos(2*theta) the angles relative to the tracers, and return the results from each region'''
+def rel_angle_regions(group_info, loc_tracers, tracer_weights=None, n_regions = 100, pimax = 20, max_proj_sep = 30, max_neighbors=100):
+    '''divide the angle catalog into n_regions by RA and DEC, calculate cos(2*theta) the angles relative to the tracers, and return the results from each region
+    group_info: must contain central carteisan postion, angle, and RA/DEC of groups
+    loc_tracers: array of 3d points corresponding to the tracers
+    '''
     
-    # sort ang_tracers and ang_values by z (i.e. DEC)
-    sorter = np.argsort(ang_tracers[:,2])
-    ang_tracers = ang_tracers[sorter]
-    ang_values = ang_values[sorter]
+    # sort ang_tracers and ang_values by DEC
+    dec_sorter = np.argsort(group_info['DEC'])
     
     # divide catalogs into regions
-    n_in_region = int((len(ang_tracers) / n_regions)+1)
+    n_slices = int(np.sqrt(n_regions))
+    n_in_dec_slice = int((len(group_info) / n_slices)+1)
     j = 0 
-    k = n_in_region
+    k = n_in_dec_slice
     
     all_proj_dists = []
     all_pa_rels = []
-    for i in range(n_in_region):
-        if k > len(ang_tracers):
-            k = len(ang_tracers)
-        if len(ang_tracers[j:k]) == 0:
+    all_weights = []
+    for _ in range(n_slices):   # loop over DEC slices
+        
+        # for handling the last region
+        if k > len(group_info):     
+            k = len(group_info)
+        if len(group_info[j:k]) == 0:
             continue
-        proj_dist, pa_rel = calculate_rel_ang_cartesian(ang_tracers[j:k], ang_values[j:k], loc_tracers, pimax, max_proj_sep, max_neighbors)
-        all_proj_dists.append(proj_dist)
-        all_pa_rels.append(np.cos(2*pa_rel))
-        j += n_in_region
-        k += n_in_region
-    return all_proj_dists, all_pa_rels
+        
+        # slice in DEC
+        groups_dec_slice = group_info[dec_sorter[j:k]]
+        
+        # sort this slice by RA
+        ra_sorter = np.argsort(groups_dec_slice['RA'])
+        n_in_ra_slice = int((len(groups_dec_slice) / n_slices)+1)
+        n = 0
+        m = n_in_ra_slice
+        
+        for _ in range(n_slices):       # loop over RA regions in this DEC slice
+            
+            # for handling the last region
+            if m > len(groups_dec_slice):     
+                m = len(groups_dec_slice)
+            if len(groups_dec_slice[n:m]) == 0:
+                continue
+            
+            group_square = groups_dec_slice[ra_sorter[n:m]]
+            
+            proj_dist, pa_rel, weights = calculate_rel_ang_cartesian(group_square['center_loc'], group_square['orientation'], loc_tracers, loc_weights=tracer_weights, 
+                                                                     pimax=pimax, max_proj_sep = max_proj_sep, max_neighbors=max_neighbors)
+            all_proj_dists.append(proj_dist)
+            all_pa_rels.append(np.cos(2*pa_rel))
+            all_weights.append(weights)
+            
+            n += n_in_ra_slice
+            m += n_in_ra_slice
+        
+        
+        j += n_in_dec_slice
+        k += n_in_dec_slice
+        
+    return all_proj_dists, all_pa_rels, all_weights
 
 
-def bin_region_results(all_proj_dists, all_pa_rels, nbins=20, log_bins=False):
+def bin_region_results(all_proj_dists, all_pa_rels, all_weights=None, nbins=20, log_bins=False):
     '''bin the results from rel_angle_regions'''
     
     if log_bins==True:
@@ -266,14 +303,14 @@ def bin_region_results(all_proj_dists, all_pa_rels, nbins=20, log_bins=False):
         sep_bins = np.linspace(0.1, np.max(all_proj_dists[0]), nbins+1)
     
     all_binned_pa_rels = []
-    pa_rels_e = []
     for i in range(len(all_proj_dists)):
         
-        binned_pa_rels, binned_pa_rels_e = bin_sum_not_scipy(all_proj_dists[i], all_pa_rels[i], sep_bins, statistic='mean', err=True)
+        binned_seps, binned_pa_rels = bin_results(all_proj_dists[i], all_pa_rels[i], sep_bins, weights=all_weights[i])
         all_binned_pa_rels.append(binned_pa_rels)
-        pa_rels_e.append(binned_pa_rels_e)
-        
-    return sep_bins, all_binned_pa_rels, pa_rels_e
+
+    pa_rel_av = np.nanmean(all_binned_pa_rels, axis=0)
+    pa_rel_e = np.std(all_binned_pa_rels, axis=0) / np.sqrt(len(all_binned_pa_rels))
+    return sep_bins, pa_rel_av, pa_rel_e
     
 
 ################################################################

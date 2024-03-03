@@ -39,7 +39,7 @@ def bin_pair_results(pair_results, nrp_bins=100, npar_bins=150, rp_max=20, par_m
     rp_bins = np.linspace(0, rp_max, nrp_bins+1)
     rpar_bins =  np.linspace(0, par_max, npar_bins+1)
 
-    binned_pairs = stats.binned_statistic_2d(pair_sample['r_p'], pair_sample['r_par'], pair_sample['e1_rel'], 'mean', bins=[rp_bins, rpar_bins])
+    binned_pairs = stats.binned_statistic_2d(pair_results['r_p'], pair_results['s_par'], pair_results['e1_rel'], 'mean', bins=[rp_bins, rpar_bins])
     
     return binned_pairs[0]
 
@@ -52,7 +52,7 @@ def get_cf_binned(catalog, random_catalog="auto", nrp_bins=100, npar_bins=150, r
     '''
     rp_bins = np.linspace(0, rp_max, nrp_bins+1)
     rpar_bins =  np.linspace(-par_max, par_max, npar_bins*2+1)
-    pos = format_pos_for_cf(catalog, z_column='Z')
+    pos = format_pos_for_cf(catalog, z_column='Z_withRSD')
     if random_catalog=="auto":
         pos_r = generate_randoms_zshuffle(catalog)
         
@@ -81,6 +81,7 @@ def get_rsd_ia_weights(cf_binned, ia_binned):
     weight_array = slice_weights
     
     return weight_array
+
 
 def get_projected_weighted_signal(signal_2d, weights_2d):
     '''

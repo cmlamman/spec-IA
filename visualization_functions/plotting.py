@@ -92,9 +92,8 @@ def get_combined_quad_plot(matrix, rp_bins, rpar_bins):
 
 
 def plot_quad_reflect(rp_bins, rpar_bins, matrix, plot_args = {'cmap':'BuPu', 'levels':100}, save_name=False, title='', ctitle=''):
-    rp_bins_quad, rpar_bins_quad, matrix_quad = reflect4(rp_bins, rpar_bins, matrix)
-    
-    fig = plt.figure(figsize=(4,5))
+    rp_bins_quad, rpar_bins_quad, matrix_quad = get_combined_quad_plot(matrix, rp_bins, rpar_bins)
+
     fts=14 
     lbs=12
     

@@ -10,7 +10,7 @@ def remove_astropyu(values_list, unit=u.Mpc):
 def get_bin_centers(bin_arr):
     return (bin_arr[1:] + bin_arr[:-1])/2
 
-def bin_sum_not_scipy(x_values, y_values, x_bins, statistic='sum', err=False):
+def bin_sum_not_scipy(x_values, y_values, x_bins, statistic='sum', err=False, weights=None):
     '''
     alternative to scipy, which sometimes has issues handling binnind with very non-uniform footprints
     x_bins = bin edges
@@ -40,6 +40,26 @@ def bin_sum_not_scipy(x_values, y_values, x_bins, statistic='sum', err=False):
             return np.asarray(remove_astropyu(y_sums)), np.asarray(remove_astropyu(y_errs))
         else:
             return np.asarray(remove_astropyu(y_sums))
+        
+        
+def bin_results(seps, reles, rp_bins, weights=None): 
+    '''sep_max really does nothing'''
+    
+    if(weights is None):
+        weights = np.asarray([1]*len(reles))
+        
+    i_keep = (seps<np.max(rp_bins))
+    reles = reles[i_keep]
+    seps = seps[i_keep]
+    weights = weights[i_keep]
+    
+    rp_bin_centers = (rp_bins[1:]+rp_bins[:-1])/2   # just using centers of bins here. but could change to do mean rp value in each bin
+        
+    msum = bin_sum_not_scipy(seps, reles*weights, x_bins=rp_bins, statistic='sum')
+    wsum = bin_sum_not_scipy(seps, weights, x_bins=rp_bins, statistic='sum')
+    wmeans = msum / wsum
+
+    return rp_bin_centers, wmeans
         
 def get_cov_matrix_from_regions(signal_regions):
     '''signa_regions is array of shape (n_regions, n_bins)'''

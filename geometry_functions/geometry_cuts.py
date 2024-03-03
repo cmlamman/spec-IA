@@ -1,4 +1,4 @@
-from coordinate_functions import *
+from geometry_functions.coordinate_functions import *
 
 #################################################################
 ## functions to limit a table of objects to only those within a given boundary
@@ -20,6 +20,6 @@ def donut_region(targets, ra, dec, r_min, r_max):
     return targets[(seps<=r_max) & (seps>r_min)]
 
 def cylindrical_cut(pair_table, rp_max=20, rpar_max=30):
-    return pair_table[((pair_table['r_p']<20)&(pair_table['r_par']<30))] #pair_table[((pair_table['r_p']<20)&(pair_table['r_par']<30))]
+    return pair_table[((pair_table['r_p']<rp_max)&(pair_table['r_par']<rpar_max))] #pair_table[((pair_table['r_p']<20)&(pair_table['r_par']<30))]
 
 #################################################################
