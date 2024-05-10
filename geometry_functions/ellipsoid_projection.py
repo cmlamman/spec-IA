@@ -23,7 +23,7 @@ def format_ellipsoid_abacus(eigenvectors, eigenvalues, position = np.asarray([0,
     return el
 
 
-def get_projected_shape_sphere(el):
+def get_projected_shape_sphere(el, x_projection=False):
     '''
     Project ellipse onto plane of sky. Assumes that the LOS lies along x axis.
     el: astropy table with ellipsoid parameters, including RA and DEC
@@ -32,11 +32,12 @@ def get_projected_shape_sphere(el):
     
     e_RA = 0
     e_DEC = 0
-    try:
-        e_RA = -deg_to_rad(el['RA'])
-        e_DEC = deg_to_rad(el['DEC'])
-    except KeyError:
-        print('No RA/DEC found in ellipse table, projecting along x-axis')
+    if x_projection==False:
+        try:
+            e_RA = -deg_to_rad(el['RA'])
+            e_DEC = deg_to_rad(el['DEC'])
+        except KeyError:
+            print('No RA/DEC found in ellipse table, projecting along x-axis')
         
     # getting rotation vectors
     rot_z = R.from_rotvec(np.asarray([0, 0, e_RA]))

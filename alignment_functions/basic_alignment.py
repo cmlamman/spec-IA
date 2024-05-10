@@ -309,7 +309,7 @@ def bin_region_results(all_proj_dists, all_pa_rels, all_weights=None, nbins=20, 
         all_binned_pa_rels.append(binned_pa_rels)
 
     pa_rel_av = np.nanmean(all_binned_pa_rels, axis=0)
-    pa_rel_e = np.std(all_binned_pa_rels, axis=0) / np.sqrt(len(all_binned_pa_rels))
+    pa_rel_e = np.nanstd(all_binned_pa_rels, axis=0) / np.sqrt(len(all_binned_pa_rels))
     return sep_bins, pa_rel_av, pa_rel_e
     
 

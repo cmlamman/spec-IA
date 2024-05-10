@@ -88,8 +88,35 @@ def get_points(data):
 def get_cosmo_points(data, cosmology=cosmo):
     '''convert from astropy table of RA, DEC, and redshift to 3D cartesian coordinates in Mpc/h'''
     comoving_dist = cosmo.comoving_distance(data['Z']).to(u.Mpc)
-    points = coordinates.spherical_to_cartesian(np.abs(comoving_dist), np.asarray(data['DEC'])*u.deg, np.asarray(data['RA'])*u.deg)
-    return np.asarray(points).transpose() * .7
+    points = coordinates.spherical_to_cartesian(np.abs(comoving_dist), np.asarray(data['DEC'])*u.deg, np.asarray(data['RA'])*u.deg)     # in Mpc
+    return np.asarray(points).transpose() * cosmology.h                                                                                 # in Mpc/h
+
+
+def get_pair_coords(obs_pos1, obs_pos2, use_center_origin=True, cosmology=cosmo):
+    '''
+    Takes in observed positions of galaxy pairs and returns comoving coordinates, in Mpc/h, with the orgin at the center of the pair. 
+    The first coordinate (x-axis) is along the LOS
+    The second coordinate (y-axis) is along 'RA'
+    The third coordinate (z-axis) along 'DEC', i.e. aligned with North in origional coordinates.
+    
+    INPUT
+    -------
+    obs_pos1, obs_pos2: table with columns: 'RA', 'DEC', z_column
+    use_center_origin: True for coordinate orgin at center of pair, othersise centers on first position
+    cosmology: astropy.cosmology
+    
+    RETURNS
+    -------
+    numpy array of cartesian coordinates, in Mpc/h. Shape (2,3)
+
+    '''
+    cartesian_coords = get_cosmo_points(vstack([obs_pos1, obs_pos2]), cosmology=cosmology)  # in Mpc/h
+    # find center position of coordinates
+    origin = cartesian_coords[0]
+    if use_center_origin==True:
+        origin = np.mean(cartesian_coords, axis=0)
+    cartesian_coords -= origin
+    return cartesian_coords                 # in Mpc/h
 
 def add_rsd(z, v_3d, pos_3d, poo_3d=np.asarray([-3700, 0, 0])*.7):
     '''
@@ -209,7 +236,7 @@ def get_orientation_angle_cartesian(points1, points2, los_location=np.asarray([0
     return np.arctan2((points2_proj[:,0]-points1_proj[:,0]), (points2_proj[:,1]-points1_proj[:,1]))
 
 
-def projected_separation_ra_dec(ra1, dec1, x1, y1, z1, ra2, dec2, x2, y2, z2):  # from chatgpt...
+def projected_separation_ra_dec(ra1, dec1, x1, y1, z1, ra2, dec2, x2, y2, z2): 
     '''
     Calculate the projected physical separation between two points on the sky, given cartesian positions and their RA / DEC.
     Returns physical separation in same units as input cartesian positions.
