@@ -62,7 +62,7 @@ def bin_results(seps, reles, rp_bins, weights=None):
     return rp_bin_centers, wmeans
         
 def get_cov_matrix_from_regions(signal_regions):
-    '''signa_regions is array of shape (n_regions, n_bins)'''
+    '''signal_regions is array of shape (n_regions, n_bins)'''
     
     cv = signal_regions.T
     cn = len(cv)
