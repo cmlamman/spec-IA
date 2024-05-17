@@ -33,5 +33,6 @@ bash
 
 [gal_groups.py](https://github.com/cmlamman/spec-IA/blob/main/alignment_functions/gal_groups.py) contains functions for identifying and measuring the alignment of galaxy groups. The alignment estimator is defined as the projected orienation of groups relative to a tracer sample, $\cos(2\Theta)$, as a function of projected separation $R$. A high-level example of this can be found in [basic_group_alignment.ipynb](https://github.com/cmlamman/spec-IA/blob/main/basic_group_alignment.ipynb).
 
+All that is needed to run these basic functions is a catalog with the columns RA, DEC (in degrees) and Z (redshift).
 
 <img src="media/group_schematic.png" alt="schematic" width="200"/>
