@@ -1,5 +1,5 @@
 # spec-IA
-This repository contains tools for measuring Intrinsic Alignments in spectroscopic data.
+This repository contains tools for measuring intrinsic alignments of galaxies and galaxy groups in spectroscopic data.
 
 ## Installation
 
@@ -9,7 +9,8 @@ spec-IA requires Python and the following libraries:
 - Matplotlib
 - Pandas
 - SciPy
-- astropy
+- Astropy
+- Corrfunc (optional, for correlation functions)
 
 These can be installed through pip:
 
@@ -29,7 +30,6 @@ bash
 
 
 ## Group Alignment
+![Test Image](media/group_schematic.png){:height="50%" width="50%"}
 
-![Test Image](media/group_schematic.png)
-
-gal_groups.py contains functions for identifying and measuring the alignment of galaxy groups. The alignment estimator is defined as the projected orienation of groups relative to a tracer sample, $\cos(2\Theta)$, as a function of projected separation $R$. A high-level example of this can be found in [basic_group_alignment.ipynb](https://github.com/cmlamman/spec-IA/blob/main/basic_group_alignment.ipynb).
+[gal_groups.py](https://github.com/cmlamman/spec-IA/blob/main/alignment_functions/gal_groups.py) contains functions for identifying and measuring the alignment of galaxy groups. The alignment estimator is defined as the projected orienation of groups relative to a tracer sample, $\cos(2\Theta)$, as a function of projected separation $R$. A high-level example of this can be found in [basic_group_alignment.ipynb](https://github.com/cmlamman/spec-IA/blob/main/basic_group_alignment.ipynb).

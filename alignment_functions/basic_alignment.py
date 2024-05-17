@@ -192,10 +192,11 @@ def get_rel_es(catalog, indices, data_weights=None, weights=None, rcolor='rw1', 
             return e1_re, e2_rel, all_ws, psep_mpc
         elif return_sep==False:
             return e1_re, e2_rel, all_ws
-    
-    
-def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, loc_weights=None, pimax = 20, max_proj_sep = 30, max_neighbors=100):
-    '''ang and loc tracers are 3d points. ang_values are orientation angles of ang_tracers'''
+
+def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, loc_weights=None, pimax = 20, max_proj_sep = 30, max_neighbors=100, return_los=False):
+    '''ang and loc tracers are 3d points. ang_values are orientation angles of ang_tracers 
+    - pimax (float, optional): Maximum line-of-sight separation for pairs of galaxies in Mpc/h. Default is 30.
+    '''
     # make tree
     tree = cKDTree(loc_tracers)
     # find neighbors
@@ -224,19 +225,25 @@ def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, loc_weight
     
     pa_rel = center_angles[pairs_to_keep] - position_angle
     
-    if loc_weights is None:
+    if loc_weights is None and return_los==False:
         return proj_dist[pairs_to_keep], pa_rel
+    elif loc_weights is None and return_los==True:
+        return proj_dist[pairs_to_keep], pa_rel, los_sep[pairs_to_keep]
     
-    elif loc_weights is not None:
+    elif loc_weights is not None and return_los==False:
         return proj_dist[pairs_to_keep], pa_rel, loc_weights[ii.ravel()][pairs_to_keep]
+    elif loc_weights is not None and return_los==True:
+        return proj_dist[pairs_to_keep], pa_rel, loc_weights[ii.ravel()][pairs_to_keep], los_sep[pairs_to_keep]
 
 
 # calculate relative angles in seprate regions and returned binned results
 
-def rel_angle_regions(group_info, loc_tracers, tracer_weights=None, n_regions = 100, pimax = 20, max_proj_sep = 30, max_neighbors=100):
-    '''divide the angle catalog into n_regions by RA and DEC, calculate cos(2*theta) the angles relative to the tracers, and return the results from each region
+def rel_angle_regions(group_info, loc_tracers, tracer_weights=None, n_regions = 100, pimax = 20, max_proj_sep = 30, max_neighbors=100, return_los=False):
+    '''
+    divide the angle catalog into n_regions by RA and DEC, calculate cos(2*theta) the angles relative to the tracers, and return the results from each region
     group_info: must contain central carteisan postion, angle, and RA/DEC of groups
-    loc_tracers: array of 3d points corresponding to the tracers
+    loc_tracers: array of 3d points corresponding to the tracers 
+    - pimax (float, optional) or (list, length of n_Rbins): Maximum line-of-sight separation for pairs of galaxies in Mpc/h. Default is 20.
     '''
     
     # sort ang_tracers and ang_values by DEC
@@ -251,6 +258,7 @@ def rel_angle_regions(group_info, loc_tracers, tracer_weights=None, n_regions = 
     all_proj_dists = []
     all_pa_rels = []
     all_weights = []
+    all_los_seps = []
     for _ in range(n_slices):   # loop over DEC slices
         
         # for handling the last region
@@ -278,8 +286,14 @@ def rel_angle_regions(group_info, loc_tracers, tracer_weights=None, n_regions = 
             
             group_square = groups_dec_slice[ra_sorter[n:m]]
             
-            proj_dist, pa_rel, weights = calculate_rel_ang_cartesian(group_square['center_loc'], group_square['orientation'], loc_tracers, loc_weights=tracer_weights, 
-                                                                     pimax=pimax, max_proj_sep = max_proj_sep, max_neighbors=max_neighbors)
+            if return_los==False:
+                proj_dist, pa_rel, weights = calculate_rel_ang_cartesian(group_square['center_loc'], group_square['orientation'], loc_tracers, loc_weights=tracer_weights, 
+                                                                         pimax=pimax, max_proj_sep = max_proj_sep, max_neighbors=max_neighbors, return_los=False)
+            elif return_los==True:
+                proj_dist, pa_rel, weights, los_seps = calculate_rel_ang_cartesian(group_square['center_loc'], group_square['orientation'], loc_tracers, loc_weights=tracer_weights, 
+                                                                         pimax=pimax, max_proj_sep = max_proj_sep, max_neighbors=max_neighbors, return_los=return_los)
+                all_los_seps.append(los_seps)
+                
             all_proj_dists.append(proj_dist)
             all_pa_rels.append(np.cos(2*pa_rel))
             all_weights.append(weights)
@@ -290,22 +304,51 @@ def rel_angle_regions(group_info, loc_tracers, tracer_weights=None, n_regions = 
         
         j += n_in_dec_slice
         k += n_in_dec_slice
-        
-    return all_proj_dists, all_pa_rels, all_weights
+    if return_los==False:
+        return all_proj_dists, all_pa_rels, all_weights
+    elif return_los==True:
+        return all_proj_dists, all_pa_rels, all_weights, all_los_seps
 
+def sliding_pimax(r_sep):
+    return 10 + (2/3)*r_sep
 
-def bin_region_results(all_proj_dists, all_pa_rels, all_weights=None, nbins=20, log_bins=False):
-    '''bin the results from rel_angle_regions'''
+def bin_region_results(all_proj_dists, all_pa_rels, all_weights=None, nbins=20, log_bins=False, use_sliding_pimax=False, los_sep=None):
+    '''
+    bin the results from rel_angle_regions
+    if use_sliding_pimax is True, pairs are limited to a pimax of 10 + (2/3)*proj_dists, required los_sep
+    '''
     
     if log_bins==True:
-        sep_bins = np.logspace(0, np.log10(np.max(all_proj_dists[0])), nbins+1)   
+        sep_bins = np.logspace(0, np.log10(np.max(all_proj_dists[0])), nbins+1)     # bin edges
     elif log_bins==False:
-        sep_bins = np.linspace(0.1, np.max(all_proj_dists[0]), nbins+1)
+        sep_bins = np.linspace(0.1, np.max(all_proj_dists[0]), nbins+1)             # bin edges
     
     all_binned_pa_rels = []
     for i in range(len(all_proj_dists)):
         
-        binned_seps, binned_pa_rels = bin_results(all_proj_dists[i], all_pa_rels[i], sep_bins, weights=all_weights[i])
+        dist_to_bin = all_proj_dists[i]
+        pa_rel_to_bin = all_pa_rels[i]
+        if all_weights is not None:
+            weights_to_bin = all_weights[i]
+        else:
+            weights_to_bin = None
+            
+        if use_sliding_pimax==True:
+            # pairs to keep. Start by removing ones that fall outside the lowest bin. The following is messed up if you include these.
+            i_keep = dist_to_bin > np.min(sep_bins)
+            i_keep &= dist_to_bin < np.max(sep_bins)                                                 
+            sep_bins_middle = (sep_bins[1:] + sep_bins[:-1]) / 2                                        # middle of bins  
+            sep_bins_middle = np.append(sep_bins_middle, np.nan)                                        # add placeholder for pairs that fall outside the bins (won't be used)                                                              
+            binned_dist = sep_bins_middle[(np.digitize(dist_to_bin, bins=sep_bins, right=True)-1)]      # replace each distance with the middle of the bin it falls in
+            i_keep &= los_sep[i] < sliding_pimax(binned_dist)                                              # keep only pairs within the pimax for that bin
+            
+            # limit all pairs to these requirements
+            dist_to_bin = dist_to_bin[i_keep]
+            pa_rel_to_bin = pa_rel_to_bin[i_keep]
+            if all_weights is not None:
+                weights_to_bin = weights_to_bin[i_keep]
+        
+        binned_seps, binned_pa_rels = bin_results(dist_to_bin, pa_rel_to_bin, sep_bins, weights=weights_to_bin)
         all_binned_pa_rels.append(binned_pa_rels)
 
     pa_rel_av = np.nanmean(all_binned_pa_rels, axis=0)

@@ -1,5 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
+plt.rcParams["font.family"] = 'DejaVu Serif'
+plt.rcParams["mathtext.fontset"] = 'dejavuserif'
+
 from geometry_functions.coordinate_functions import *
 import matplotlib.colors as colors
 
@@ -111,3 +114,52 @@ def plot_quad_reflect(rp_bins, rpar_bins, matrix, plot_args = {'cmap':'BuPu', 'l
     if save_name!=False:
         fig.savefig('/pscratch/sd/c/clamman/plots_to_download/'+save_name+'.png', dpi=400, bbox_inches='tight')
         
+        
+        
+##############################################
+# PLOTTING ALIGNMENT RESULTS
+##############################################
+
+def plot_groupAlignment_results(result_paths, random_paths, groupCorr_paths=None, labels=None, colors=['b'], linestyles=['_'], fts=16, figsize=(10,8), save_path=None, dpi=200):
+    
+    fig = plt.figure(figsize=figsize)
+    falpha = 0.08 # shading of error region
+    
+    for i in range(len(result_paths)):
+        results = Table.read(result_paths[i])
+        randoms = Table.read(random_paths[i])
+        
+        # projected 2-point correlation between groups and tracers
+        if groupCorr_paths!=None:
+            groupCorr = Table.read(groupCorr_paths[i])
+        else:
+            groupCorr = 1
+        
+        ang_plot = results['relAng_plot'] - randoms['relAng_plot']
+        ang_plot_e = np.sqrt(results['relAng_plot_e']**2 + randoms['relAng_plot_e']**2)
+        xvalues = (results['R_bin_min'] + results['R_bin_max'])/2
+        
+        if np.max(randoms['relAng_plot'])!=np.max(results['relAng_plot']) or len(randoms)!=len(results):
+            print('randoms and results have different R binning!')
+        
+        ang_plot *= groupCorr
+        ang_plot_e  *= groupCorr
+        
+        # plot the errorbars as a shaded region
+        plt.fill_between(xvalues, xvalues*(ang_plot-ang_plot_e), xvalues*(ang_plot+ang_plot_e), alpha=falpha, color=colors[i]);
+        plt.errorbar(xvalues, xvalues*ang_plot, yerr=xvalues*ang_plot_e, label=labels[i], alpha=1, color=colors[i],
+                    marker='o', markersize=4, capsize=3, elinewidth=1, linewidth=2.2, linestyle=linestyles[i], zorder=0);
+        
+    plt.xlabel(r'Transverse separation, $R$ [$h^{-1}$Mpc]')
+    plt.ylabel(r'Relative orientation of groups, $R$cos(2$\Phi$)'+'\n'+r'$\Pi_{\rm max} = 30h^{-1}$ Mpc')
+    if len(groupCorr)>1:
+        plt.ylabel(r'Relative orientation of groups, $w_p(R)\times R$cos(2$\Phi$)'+'\n'+r'$\Pi_{\rm max} = 30h^{-1}$ Mpc')
+    plt.xscale('log')
+    # add dotted line at 0
+    plt.plot([0,150], [0,0], color='grey', linewidth=.3, zorder=0, dashes=(16,16))
+    plt.legend()
+    
+    if save_path!=None:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+    
+    plt.show()
