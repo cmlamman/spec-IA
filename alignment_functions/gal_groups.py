@@ -281,7 +281,8 @@ def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, cosmology=
     if use_sliding_pimax==False:
         results['pimax'] = [pimax] * len(sep_bins[:-1])
     else:
-        results['pimax'] = pimax
+        bin_centers = (sep_bins[:-1] + sep_bins[1:]) / 2
+        results['pimax'] = sliding_pimax(bin_centers)
     
     if save_path is not None:
         results.write(save_path, overwrite=True)
@@ -300,7 +301,7 @@ def get_group_alignment_randoms(catalog_for_groups, random_catalog_paths, cosmol
         raise ValueError('save_path must be provided')
     
     n_random_catalogs = len(random_catalog_paths)
-    group_table = make_group_catalog(catalog_for_groups, cosmology=cosmology)
+    group_catalog = make_group_catalog(catalog_for_groups, cosmology=cosmology)
 
     rand_signal = []
     for rand_batch in range(n_random_catalogs):
@@ -315,10 +316,10 @@ def get_group_alignment_randoms(catalog_for_groups, random_catalog_paths, cosmol
         random_points = get_cosmo_points(random_catalog)  # convert to comoving cartesian points in Mpc/h, assumes observer is at orgin
 
         if use_sliding_pimax:
-            group_seps, group_paRel, weights, group_los = rel_angle_regions(group_catalog, loc_tracers = comoving_points_tracers, tracer_weights = catalog_for_tracers['WEIGHT'],
+            group_seps, group_paRel, weights, group_los = rel_angle_regions(group_catalog, loc_tracers = random_points, tracer_weights = random_catalog['WEIGHT'],
                                                             n_regions=n_sky_regions, pimax=np.max(pimax), max_proj_sep=max_proj_sep, max_neighbors=max_neighbors, return_los=True)
         else:
-            group_seps, group_paRel, weights = rel_angle_regions(group_catalog, loc_tracers = comoving_points_tracers, tracer_weights = catalog_for_tracers['WEIGHT'],
+            group_seps, group_paRel, weights = rel_angle_regions(group_catalog, loc_tracers = random_points, tracer_weights = random_catalog['WEIGHT'],
                                                             n_regions=n_sky_regions, pimax=np.max(pimax), max_proj_sep=max_proj_sep, max_neighbors=max_neighbors, return_los=False)
             group_los = None
         
@@ -335,6 +336,72 @@ def get_group_alignment_randoms(catalog_for_groups, random_catalog_paths, cosmol
     if use_sliding_pimax==False:
         randoms_results['pimax'] = [pimax] * len(sep_bins[:-1])
     else:
-        randoms_results['pimax'] = pimax
+        bin_centers = (sep_bins[:-1] + sep_bins[1:]) / 2
+        randoms_results['pimax'] = sliding_pimax(bin_centers)
     
     randoms_results.write(save_path, overwrite=True)
+    
+    
+def get_group_2pt_projected_corr(catalog, random_paths, tracer_catalog=None, rp_bins=np.logspace(0, np.log10(150), 11), rpar_bins=np.linspace(0, 80, 101), 
+                                 use_sliding_pimax=False, print_progress=False, save_path=None):    
+    '''
+    Calculate projected 2-point correlation functions between galaxy groups in catalog and the catalog (or a tracer catalog).
+    bins are given in bin edges.
+    Will use variable pimax if use_sliding_pimax is True, else just the maximum of the rpar_bins.
+    Returns the correlation function and saves it to save_path if provided.
+    '''
+    
+    from pycorr import TwoPointCorrelationFunction  # needs to be run in environment with pycorr!
+    
+    if tracer_catalog is None:
+        traer_catalog = catalog
+    pos = format_pos_for_cf(tracer_catalog, z_column='Z')
+    
+    catalog2 =  make_group_catalog(catalog)
+    pos2 = format_pos_for_cf(catalog2, z_column='Z')
+    pos_r2 = generate_randoms_zshuffle(catalog2)
+    
+    
+    corr_results = []
+    n=0
+    for random_path in random_paths:
+        if print_progress:
+            print('working on ',n, ' of ', len(random_paths))
+        
+        desi_randoms = Table.read(random_path)
+        desi_randoms.keep_columns(['RA', 'DEC'])
+        desi_randoms = desi_randoms[(np.random.choice(len(desi_randoms), len(tracer_catalog), replace=False))]
+        desi_randoms['Z'] = tracer_catalog['Z']
+        pos_r = format_pos_for_cf(desi_randoms, z_column='Z')
+        
+        corr_result1 = TwoPointCorrelationFunction('rppi', edges=(rp_bins, rpar_bins), position_type='rdd', data_positions1=pos, randoms_positions1=pos_r,
+                                              data_positions2=pos2, randoms_positions2=pos_r2, engine='corrfunc', nthreads=4)
+           
+        if use_sliding_pimax:
+            bin_centers = (rp_bins[1:] + rp_bins[:-1])/2
+            pi_max_values = sliding_pimax(bin_centers)
+            wp_values = []
+            for i in range(len(bin_centers)):
+                wp1 = corr_result1(pimax=pi_max_values[i])
+                wp_values.append(wp1[i])
+            corr_results.append(wp_values)
+        else:
+            wp1 = corr_result1(pimax=None)
+            corr_results.append(corr_result1)
+            pi_max_values = [np.max(rpar_bins)] * len(rp_bins[:-1])
+        n+=1
+    # averaging over all randoms
+    corr_results = np.array(corr_results)
+    wp_result = np.nanmean(corr_results, axis=0)
+    wp_result_e = np.nanstd(corr_results, axis=0) / np.sqrt(len(corr_results))
+    
+    if save_path is not None:
+        corr_table = Table()
+        corr_table['R_bin_min'] = rp_bins[:-1]
+        corr_table['R_bin_max'] = rp_bins[1:]
+        corr_table['pimax'] = pi_max_values
+        corr_table['wp'] = wp_result
+        corr_table['wp_e'] = wp_result_e
+        corr_table.write(save_path, overwrite=True)
+        
+    return np.mean(corr_results, axis=0)
