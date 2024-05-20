@@ -342,7 +342,7 @@ def get_group_alignment_randoms(catalog_for_groups, random_catalog_paths, cosmol
     randoms_results.write(save_path, overwrite=True)
     
     
-def get_group_2pt_projected_corr(catalog, random_paths, tracer_catalog=None, rp_bins=np.logspace(0, np.log10(150), 11), rpar_bins=np.linspace(0, 80, 101), 
+def get_group_2pt_projected_corr(catalog, random_paths, catalog2=None, tracer_catalog=None, rp_bins=np.logspace(0, np.log10(150), 11), rpar_bins=np.linspace(0, 80, 101), 
                                  use_sliding_pimax=False, print_progress=False, save_path=None):    
     '''
     Calculate projected 2-point correlation functions between galaxy groups in catalog and the catalog (or a tracer catalog).
@@ -353,9 +353,10 @@ def get_group_2pt_projected_corr(catalog, random_paths, tracer_catalog=None, rp_
     
     from pycorr import TwoPointCorrelationFunction  # needs to be run in environment with pycorr!
     
-    if tracer_catalog is None:
-        traer_catalog = catalog
-    pos = format_pos_for_cf(tracer_catalog, z_column='Z')
+    if catalog2 is None:
+        pos = format_pos_for_cf(catalog, z_column='Z')
+    else:
+        pos = format_pos_for_cf(catalog2, z_column='Z')
     
     catalog2 =  make_group_catalog(catalog)
     pos2 = format_pos_for_cf(catalog2, z_column='Z')
@@ -370,8 +371,8 @@ def get_group_2pt_projected_corr(catalog, random_paths, tracer_catalog=None, rp_
         
         desi_randoms = Table.read(random_path)
         desi_randoms.keep_columns(['RA', 'DEC'])
-        desi_randoms = desi_randoms[(np.random.choice(len(desi_randoms), len(tracer_catalog), replace=False))]
-        desi_randoms['Z'] = tracer_catalog['Z']
+        desi_randoms = desi_randoms[(np.random.choice(len(desi_randoms), len(catalog), replace=False))]
+        desi_randoms['Z'] = catalog['Z']
         pos_r = format_pos_for_cf(desi_randoms, z_column='Z')
         
         corr_result1 = TwoPointCorrelationFunction('rppi', edges=(rp_bins, rpar_bins), position_type='rdd', data_positions1=pos, randoms_positions1=pos_r,
@@ -388,7 +389,6 @@ def get_group_2pt_projected_corr(catalog, random_paths, tracer_catalog=None, rp_
         else:
             wp1 = corr_result1(pimax=None)
             corr_results.append(corr_result1)
-            pi_max_values = [np.max(rpar_bins)] * len(rp_bins[:-1])
         n+=1
     # averaging over all randoms
     corr_results = np.array(corr_results)
