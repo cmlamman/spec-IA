@@ -200,15 +200,15 @@ def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, loc_weight
     # make tree
     tree = cKDTree(loc_tracers)
     # find neighbors
-    dd, ii = tree.query(ang_tracers, k=max_neighbors, distance_upper_bound=np.sqrt(max_proj_sep**2 + pimax**2))
+    ii = tree.query_ball_point(ang_tracers, r=np.sqrt(max_proj_sep**2 + pimax**2))
     
     # add placeholder row to loc_tracers
     loc_tracers = np.vstack((loc_tracers, np.full(len(loc_tracers[0]), np.inf)))
     loc_weights = np.append(loc_weights, 0)
     
-    center_coords = ang_tracers[np.repeat(range(len(ang_tracers)), max_neighbors).ravel()]
-    center_angles = ang_values[np.repeat(range(len(ang_tracers)), max_neighbors).ravel()]
-    neighbor_coords = loc_tracers[ii.ravel()]
+    center_coords = np.repeat(ang_tracers, [len(i) for i in ii], axis=0)
+    center_angles = np.repeat(ang_values, [len(i) for i in ii])
+    neighbor_coords = loc_tracers[np.concatenate(ii)]
     
     dist_to_orgin_loc = np.sqrt(np.sum(neighbor_coords**2, axis=1))
     dist_to_orgin_ang = np.sqrt(np.sum(center_coords**2, axis=1))
@@ -231,9 +231,9 @@ def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, loc_weight
         return proj_dist[pairs_to_keep], pa_rel, los_sep[pairs_to_keep]
     
     elif loc_weights is not None and return_los==False:
-        return proj_dist[pairs_to_keep], pa_rel, loc_weights[ii.ravel()][pairs_to_keep]
+        return proj_dist[pairs_to_keep], pa_rel, loc_weights[np.concatenate(ii)][pairs_to_keep]
     elif loc_weights is not None and return_los==True:
-        return proj_dist[pairs_to_keep], pa_rel, loc_weights[ii.ravel()][pairs_to_keep], los_sep[pairs_to_keep]
+        return proj_dist[pairs_to_keep], pa_rel, loc_weights[np.concatenate(ii)][pairs_to_keep], los_sep[pairs_to_keep]
 
 
 # calculate relative angles in seprate regions and returned binned results
@@ -310,7 +310,7 @@ def rel_angle_regions(group_info, loc_tracers, tracer_weights=None, n_regions = 
         return all_proj_dists, all_pa_rels, all_weights, all_los_seps
 
 def sliding_pimax(r_sep):
-    return 10 + (2/3)*r_sep
+    return 6 + (2/3)*r_sep
 
 def bin_region_results(all_proj_dists, all_pa_rels, all_weights=None, nbins=20, log_bins=False, use_sliding_pimax=False, los_sep=None):
     '''

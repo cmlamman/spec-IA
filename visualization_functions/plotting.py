@@ -141,6 +141,7 @@ def plot_groupAlignment_results(result_paths, random_paths=None, groupCorr_paths
                 random_table_batch = [Table.read(path) for path in random_batch_paths]
                 randoms = np.mean(np.asarray([random_table['relAng_plot'] for random_table in random_table_batch]), axis=0)
                 randoms_e = np.sqrt(np.sum(np.asarray([random_table['relAng_plot_e']**2 for random_table in random_table_batch]), axis=0))
+                random_table = random_table_batch[0]
             else:
                 random_table = Table.read(random_paths[i])
                 randoms = random_table['relAng_plot']
@@ -175,7 +176,7 @@ def plot_groupAlignment_results(result_paths, random_paths=None, groupCorr_paths
     elif use_pimax_gradient==True:
         pimax_label = ''
         # make the plot have a background grey gradient which corresponds to the pimax value in each R_bin
-        plt.text(results['R_bin_min'][0]+.12, -.27, r'$\Pi_{\rm max}$ [$h^{-1}$Mpc]', fontsize=fts-3, ha='left', alpha=.5)
+        plt.text(results['R_bin_min'][0]+.15, -.27, r'$\Pi_{\rm max}$ [$h^{-1}$Mpc]', fontsize=fts-3, ha='left', alpha=.5)
         for j in range(len(results)):
             pvalue = 1 - ((results['pimax'][j] / np.max(results['pimax'])-.1)/5)
             pcolor = (pvalue**1.2, pvalue**1.2, pvalue)
@@ -202,6 +203,7 @@ def plot_groupAlignment_results(result_paths, random_paths=None, groupCorr_paths
     #    plt.colorbar(label=r'$\Pi_{\rm max}$ [Mpc]', pad=0.01)
     
     plt.ylim(ylim)
+    plt.xlim([np.min(results['R_bin_min']), np.max(results['R_bin_max'])])
     if save_path!=None:
         plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     

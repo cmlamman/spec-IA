@@ -172,7 +172,7 @@ def trim_groups(points, group_indices, transverse_max, los_max):
 ###############################
 
 
-def make_group_catalog(data_catalog, comoving_points=None, transverse_max = 1, los_max = 12, max_n = 100, cosmology=cosmo):
+def make_group_catalog(data_catalog, comoving_points=None, transverse_max = 1, los_max = 6, max_n = 100, cosmology=cosmo):
     '''
     This function finds pairs of galaxies in a catalog, creats groups from the pairs, and returns a catalog of group properties.
     
