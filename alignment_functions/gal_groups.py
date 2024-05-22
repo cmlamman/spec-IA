@@ -216,7 +216,7 @@ def make_group_catalog(data_catalog, comoving_points=None, transverse_max = 1, l
 
 
 def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins=np.logspace(0, 2, 10), pimax=30, cosmology=cosmo, print_progress=False, 
-                        n_sky_regions=100, save_path=None, pair_max_los=6, pair_max_transverse=1):
+                        n_sky_regions=100, save_path=None, pair_max_los=6, pair_max_transverse=1, early_binning=False):
     '''
     Calculate the alignment of galaxy groups within the given catalog, relative to tracers from the same catalog or other, if provided. 
     Saves results to save_path, if provided.
@@ -233,6 +233,7 @@ def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins=np.
     - max_neighbors (int, optional): Maximum number of neighbors to consider for each galaxy. Default is 1000.
     - n_Rbins (int, optional): Number of transverse bins for binning the results. Default is 10.
     - save_path (str, optional): Path to save the results. If not provided, the results will not be saved.
+    - early binning: This option will bin the galaxies early on, saving memory. Helpful if running on dense regions (like BGS), but will generally be a bit noisier measurement.
     
     Returns:
     results (Table): Table with columns 'R_bin_edges', 'relAang_plot', 'relAng_plot_e'.
@@ -260,9 +261,26 @@ def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins=np.
         
     if print_progress:
         print('Measuring alignment')
+    
+    if early_binning:
+        relAng, relAng_e = rel_angle_regions_binned(group_catalog, loc_tracers = comoving_points_tracers,  tracer_weights = catalog_for_tracers['WEIGHT'],
+                                                    R_bins=R_bins, n_regions=n_sky_regions, pimax=pimax, keep_as_regions=False)
+    else:
+        max_proj_sep = np.max(R_bins)
+        n_Rbins = len(R_bins) - 1
         
-    relAng, relAng_e = rel_angle_regions_binned(group_catalog, loc_tracers = comoving_points_tracers,  tracer_weights = catalog_for_tracers['WEIGHT'],
-                                                R_bins=R_bins, n_regions=n_sky_regions, pimax=pimax, keep_as_regions=False)
+        # if pimax is not a single value...
+        if isinstance(pimax, (int, float)):
+            group_seps, group_paRel, weights = rel_angle_regions(group_catalog, loc_tracers = comoving_points_tracers, tracer_weights = catalog_for_tracers['WEIGHT'],
+                                                            n_regions=n_sky_regions, pimax=pimax, max_proj_sep=max_proj_sep, return_los=False)
+            group_los = None
+            use_sliding_pimax = False
+        else:
+            group_seps, group_paRel, weights, group_los = rel_angle_regions(group_catalog, loc_tracers = comoving_points_tracers, tracer_weights = catalog_for_tracers['WEIGHT'],
+                                                            n_regions=n_sky_regions, pimax=np.max(pimax), max_proj_sep=max_proj_sep, return_los=True)
+            use_sliding_pimax = True
+        
+        sep_bins, relAng, relAng_e = bin_region_results(group_seps, group_paRel, all_weights = weights, nbins=n_Rbins, log_bins=True, use_sliding_pimax=use_sliding_pimax, los_sep=group_los)
     
     results = Table()
     

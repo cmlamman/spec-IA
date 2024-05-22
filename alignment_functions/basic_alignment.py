@@ -390,10 +390,12 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
     
     # add placeholder row to loc_tracers
     loc_tracers = np.vstack((loc_tracers, np.full(len(loc_tracers[0]), np.inf)))
+    loc_weights = np.append(loc_weights, 0)
     
     center_coords = np.repeat(ang_tracers, [len(i) for i in ii], axis=0)
     center_angles = np.repeat(ang_values, [len(i) for i in ii])
     neighbor_coords = loc_tracers[np.concatenate(ii)]
+    neighbor_weights = loc_weights[np.concatenate(ii)]
     
     dist_to_orgin_loc = np.sqrt(np.sum(neighbor_coords**2, axis=1))
     dist_to_orgin_ang = np.sqrt(np.sum(center_coords**2, axis=1))
@@ -424,7 +426,11 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
         position_angle = get_orientation_angle_cartesian(center_coords[i_bin_keep], neighbor_coords[i_bin_keep])
         pa_rel = center_angles[i_bin_keep] - position_angle
         # get weighted average using loc_weights
-        rel_angles.append(np.average(np.cos(2*pa_rel), weights=loc_weights[np.concatenate(ii)][i_bin_keep]))
+        weight_to_use = neighbor_weights[i_bin_keep]    
+        weighted_sum = np.nansum(np.cos(2*pa_rel) * weight_to_use)
+        weight_sum = np.nansum(weight_to_use)
+        weighted_av = weighted_sum / weight_sum
+        rel_angles.append(weighted_av)
     
     return rel_angles
 
