@@ -357,3 +357,167 @@ def bin_region_results(all_proj_dists, all_pa_rels, all_weights=None, nbins=20, 
     
 
 ################################################################
+# ALTERNATIVE HIGH-LEVEL FUNCTIONS WHICH BIN EARLIER TO SAVE MEMORY
+# (necessary for very dense catalogs, like DESI BGS)
+################################################################
+
+
+def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers, loc_weights, R_bins, pimax):
+    '''
+    returns the average relative angles in each R bin, array of size (len(R_bins)-1)
+    
+    Parameters
+    ----------
+    ang_tracers : array, shape (n, 3)
+        3d points of tracers
+    ang_values : array, shape (n)
+        orientation angles of tracers. Must be same length as ang_tracers.
+    loc_tracers : array, shape (m, 3)
+        3d points of locations
+    loc_weights : array, shape (m)
+        weights of locations. Must be same length as loc_tracers.
+    R_bins : array
+        bin edges of projected separation, in Mpc/h
+    pimax : float or array
+        Maximum line-of-sight separation for pairs of galaxies in Mpc/h. Default is 30.
+        Can also be array of size (R_bins-1) to use a different pimax for each R bin
+
+    '''
+    # make tree
+    tree = cKDTree(loc_tracers)
+    # find neighbors
+    ii = tree.query_ball_point(ang_tracers, r=np.sqrt(R_bins[-1]**2 + np.max(pimax)**2))
+    
+    # add placeholder row to loc_tracers
+    loc_tracers = np.vstack((loc_tracers, np.full(len(loc_tracers[0]), np.inf)))
+    
+    center_coords = np.repeat(ang_tracers, [len(i) for i in ii], axis=0)
+    center_angles = np.repeat(ang_values, [len(i) for i in ii])
+    neighbor_coords = loc_tracers[np.concatenate(ii)]
+    
+    dist_to_orgin_loc = np.sqrt(np.sum(neighbor_coords**2, axis=1))
+    dist_to_orgin_ang = np.sqrt(np.sum(center_coords**2, axis=1))
+    los_sep = np.abs(dist_to_orgin_loc - dist_to_orgin_ang)
+    proj_dist = np.abs(get_proj_dist(center_coords, neighbor_coords))
+    
+    # bin the projected distances in the provided R bins.
+    # pairs to keep.
+    i_keep = (proj_dist > np.min(R_bins)) & (proj_dist < np.max(R_bins))    # start by keeping ones which fall within the sep bins
+    # get the index of the bin each distance falls in
+    R_bin_i = np.digitize(proj_dist, bins=R_bins) - 1                       # length of proj_dist, values are the bin index for each proj_dist
+    # if pimax is a float or integer, keep pairs within that pimax
+    if isinstance(pimax, (int, float)):
+        i_keep &= los_sep < pimax
+    # if pimax is an array, keep pairs within the pimax for each bin
+    elif len(pimax)==(len(R_bins)-1):
+        pimax = np.append(pimax, np.nan)                                    # add placeholder value to pimax for pairs that fall outside the bins (won't be used)
+        i_keep &= los_sep < pimax[R_bin_i]
+    else:
+        raise ValueError('pimax must be a float or array of size (len(R_bins)-1)')
+    
+    rel_angles = []
+    # return average in each bin
+    for i in range(len(R_bins)-1):
+        # get the indices of pairs that fall in this bin and are included in i_keep
+        i_bin_keep = i_keep & (R_bin_i == i)
+        
+        position_angle = get_orientation_angle_cartesian(center_coords[i_bin_keep], neighbor_coords[i_bin_keep])
+        pa_rel = center_angles[i_bin_keep] - position_angle
+        # get weighted average using loc_weights
+        rel_angles.append(np.average(np.cos(2*pa_rel), weights=loc_weights[np.concatenate(ii)][i_bin_keep]))
+    
+    return rel_angles
+
+
+# New function that calculates realtive ellipticities but bins in sep earlier to save memory
+def rel_angle_regions_binned(orientation_catalog, loc_tracers, tracer_weights, R_bins, n_regions=100, pimax=30, keep_as_regions=False):
+    '''
+    Divides the orientation catalog into n_regions by RA and DEC, calculate cos(2*theta) the orientations relative to the tracers
+    in bins of projected separation on the sky, R_bins. The measurement in each bin is measured relative to the full tracer sample.
+    
+    Parameters
+    ----------
+    orientation_catalog : astropy table
+        table of groups with keys 'center_loc', 'orientation', 'RA', 'DEC'
+    loc_tracers : array
+        array of 3d points corresponding to the tracers
+    tracer_weights : array
+        weights of the tracers
+    R_bins : array
+        array of bin edges for the projected separaton, in Mpc/h
+    n_regions : int, optional
+        number of sky regions to divide the data into. The default is 100. This is used to calculate standard error
+    pimax : float or array, optional
+        Maximum line-of-sight separation for pairs of galaxies in Mpc/h. Default is 30.
+        Can also be list of size (R_bins-1) to use a different pimax for each R bin
+        
+    Returns
+    -------
+    if keep_as_regions is True:
+        relAng_regions : array, size (n_regions, len(R_bins)-1)
+            array of relative angles in each region
+    if keep_as_regions is False:
+        relAng : array, size (len(R_bins)-1)
+            array of relative angles in each R bin
+        relAng_e : array, size (len(R_bins)-1)
+            array of standard error of relative angles from the independent regions
+    '''
+    
+    ## START BY LOOPING OVER THE SKY REGIONS
+    
+    # sort ang_tracers and ang_values by DEC
+    dec_sorter = np.argsort(orientation_catalog['DEC'])
+    
+    # divide catalogs into regions
+    n_slices = int(np.sqrt(n_regions))
+    n_in_dec_slice = int((len(orientation_catalog) / n_slices)+1)
+    j = 0 
+    k = n_in_dec_slice
+    
+    all_pa_rels = []
+    for _ in range(n_slices):   # loop over DEC slices
+        
+        # for handling the last region
+        if k > len(orientation_catalog):     
+            k = len(orientation_catalog)
+        if len(orientation_catalog[j:k]) == 0:
+            continue
+        
+        # slice in DEC
+        groups_dec_slice = orientation_catalog[dec_sorter[j:k]]
+        
+        # sort this slice by RA
+        ra_sorter = np.argsort(groups_dec_slice['RA'])
+        n_in_ra_slice = int((len(groups_dec_slice) / n_slices)+1)
+        n = 0
+        m = n_in_ra_slice
+        
+        for _ in range(n_slices):       # loop over RA regions in this DEC slice
+            
+            # for handling the last region
+            if m > len(groups_dec_slice):     
+                m = len(groups_dec_slice)
+            if len(groups_dec_slice[n:m]) == 0:
+                continue
+            
+            group_square = groups_dec_slice[ra_sorter[n:m]]
+
+            # returns the relative angles in each R bin for this region, array of size (len(R_bins)-1)
+            pa_rel_binned = calculate_rel_ang_cartesian_binAverage(ang_tracers = group_square['center_loc'], ang_values = group_square['orientation'], 
+                                                                   loc_tracers = loc_tracers, loc_weights=tracer_weights, R_bins=R_bins, pimax=pimax)
+            
+            all_pa_rels.append(pa_rel_binned)
+            
+            n += n_in_ra_slice
+            m += n_in_ra_slice
+        
+        j += n_in_dec_slice
+        k += n_in_dec_slice
+        
+        all_pa_rels = np.array(all_pa_rels)
+        if keep_as_regions==True:
+            return all_pa_rels
+        elif keep_as_regions==False:
+            pa_rel_av = np.nanmean(all_pa_rels, axis=0)
+            pa_rel_e = np.nanstd(all_pa_rels, axis=0) / np.sqrt(len(all_pa_rels))
+            return pa_rel_av, pa_rel_e

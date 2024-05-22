@@ -215,8 +215,8 @@ def make_group_catalog(data_catalog, comoving_points=None, transverse_max = 1, l
     return group_table
 
 
-def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, cosmology=cosmo, print_progress=False, 
-                        n_sky_regions=100, pimax=30, max_proj_sep=150, max_neighbors=1000, n_Rbins=10, save_path=None, use_sliding_pimax=False):
+def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins=np.logspace(0, 2, 10), pimax=30, cosmology=cosmo, print_progress=False, 
+                        n_sky_regions=100, save_path=None, pair_max_los=6, pair_max_transverse=1):
     '''
     Calculate the alignment of galaxy groups within the given catalog, relative to tracers from the same catalog or other, if provided. 
     Saves results to save_path, if provided.
@@ -255,34 +255,25 @@ def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, cosmology=
         
     if print_progress:
         print('Making group catalog')
-    group_catalog = make_group_catalog(catalog_for_groups, comoving_points = comoving_points_groups, cosmology=cosmology)
+    group_catalog = make_group_catalog(catalog_for_groups, comoving_points = comoving_points_groups, cosmology=cosmology, 
+                                       los_max=pair_max_los, transverse_max=pair_max_transverse)
         
     if print_progress:
         print('Measuring alignment')
         
-    if use_sliding_pimax:
-        group_seps, group_paRel, weights, group_los = rel_angle_regions(group_catalog, loc_tracers = comoving_points_tracers, tracer_weights = catalog_for_tracers['WEIGHT'],
-                                                        n_regions=n_sky_regions, pimax=np.max(pimax), max_proj_sep=max_proj_sep, max_neighbors=max_neighbors, return_los=True)
-    else:
-        group_seps, group_paRel, weights = rel_angle_regions(group_catalog, loc_tracers = comoving_points_tracers, tracer_weights = catalog_for_tracers['WEIGHT'],
-                                                        n_regions=n_sky_regions, pimax=np.max(pimax), max_proj_sep=max_proj_sep, max_neighbors=max_neighbors, return_los=False)
-        group_los = None
-    
-    if print_progress:
-        print('Binning results')
-    sep_bins, relAng_plot, relAng_plot_e = bin_region_results(group_seps, group_paRel, all_weights = weights, nbins=n_Rbins, log_bins=True, use_sliding_pimax=use_sliding_pimax, los_sep=group_los)
+    relAng, relAng_e = rel_angle_regions_binned(group_catalog, loc_tracers = comoving_points_tracers,  tracer_weights = catalog_for_tracers['WEIGHT'],
+                                                R_bins=R_bins, n_regions=n_sky_regions, pimax=pimax, keep_as_regions=False)
     
     results = Table()
     
-    results['R_bin_min'] = sep_bins[:-1]
-    results['R_bin_max'] = sep_bins[1:]
-    results['relAng_plot'] = relAng_plot
-    results['relAng_plot_e'] = relAng_plot_e
-    if use_sliding_pimax==False:
-        results['pimax'] = [pimax] * len(sep_bins[:-1])
+    results['R_bin_min'] = R_bins[:-1]
+    results['R_bin_max'] = R_bins[1:]
+    results['relAng_plot'] = relAng
+    results['relAng_plot_e'] = relAng_e
+    if isinstance(pimax, (int, float)):
+        results['pimax'] = [pimax] * len(R_bins[:-1])
     else:
-        bin_centers = (sep_bins[:-1] + sep_bins[1:]) / 2
-        results['pimax'] = sliding_pimax(bin_centers)
+        results['pimax'] = pimax
     
     if save_path is not None:
         results.write(save_path, overwrite=True)
@@ -291,8 +282,8 @@ def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, cosmology=
     return results
 
 
-def get_group_alignment_randoms(catalog_for_groups, random_catalog_paths, cosmology=cosmo, print_progress=False, 
-                        n_sky_regions=100, pimax=30, max_proj_sep=150, max_neighbors=1000, n_Rbins=10, save_path=None, use_sliding_pimax=False):
+def get_group_alignment_randoms(catalog_for_groups, random_catalog_paths, R_bins, pimax=30, cosmology=cosmo, print_progress=False, 
+                        n_sky_regions=100, save_path=None):
     '''
     Simillar to get_group_alignment, but calculates the alignment of galaxy groups within the given catalog relative to multiple random catalogs.
     random_catalog_paths: list of paths to random catalogs

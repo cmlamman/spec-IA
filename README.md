@@ -35,4 +35,4 @@ bash
 
 All that is needed to run these basic functions is a catalog with the columns RA, DEC (in degrees) and Z (redshift).
 
-<img src="media/group_schematic.png" alt="schematic" width="200"/>
+<img src="media/group_schematic.png" alt="schematic" width="400"/>
