@@ -149,6 +149,7 @@ def get_proj_dist(pos1, pos2, pos_obs=np.asarray([0, 0, 0])*.7, use_cat=False):
     if use_cat==False:
         pos_diff = pos2 - pos1
         pos_mid = .5 * (pos2 + pos1)
+        del pos1, pos2 # to save memory
     elif use_cat==True:
         pos_diff = pos2['x_L2com'] - pos1['x_L2com']
         pos_mid = .5 * (pos2['x_L2com'] + pos1['x_L2com'])
@@ -157,11 +158,22 @@ def get_proj_dist(pos1, pos2, pos_obs=np.asarray([0, 0, 0])*.7, use_cat=False):
     # project separation vector between objects onto LOS vector
     proj = np.sum(pos_diff*obs_vec, axis=1) / np.linalg.norm(obs_vec, axis=1)
     proj_v = (proj[:, np.newaxis] * obs_vec) / np.linalg.norm(obs_vec, axis=1)[:, np.newaxis]
+    
+    # project separation vector between objects onto LOS vector
+    pos_diff1 = pos_diff * obs_vec
+    pos_diff1 = np.sum(pos_diff1, axis=1)
+    obs_nrm = np.linalg.norm(obs_vec, axis=1)
+    proj = pos_diff1 / obs_nrm
+    del pos_diff1
+    proj_v1 = proj[:, np.newaxis] * obs_vec
+    proj_v = proj_v1 / obs_nrm[:, np.newaxis]
+    del proj_v1
 
     # subtract this vector from the separation vector
     # magnitude is projected transverse distance
     transverse_v = pos_diff - proj_v
-    return np.linalg.norm(transverse_v, axis=1)
+    final_dist = np.linalg.norm(transverse_v, axis=1)
+    return final_dist
 
 ############
 # CARTESIAN FUNCTIONS
@@ -220,20 +232,23 @@ def get_orientation_angle_cartesian(points1, points2, los_location=np.asarray([0
     "North" (or y-axis) is assumed to be the projection of the z-axis onto the plane of the sky
     '''
     # find the LOS vector
-    los_vector = (points1 + points2)/2 - los_location
-    los_vector = los_vector / np.linalg.norm(los_vector, axis=1)[:, None]
+    los_vector = (points1 + points2)/2
+    los_vector -= los_location
+    los_vector /= np.linalg.norm(los_vector, axis=1)[:, None]
     # find the vector perpendicular to the LOS vector and the z-axis
     perp_vector = np.cross(los_vector, np.asarray([0,0,1]))
-    perp_vector = perp_vector / np.linalg.norm(perp_vector, axis=1)[:, None]
+    perp_vector /= np.linalg.norm(perp_vector, axis=1)[:, None]
     # find the vector perpendicular to the LOS vector and the perp_vector
     perp_vector2 = np.cross(los_vector, perp_vector)
-    perp_vector2 = perp_vector2 / np.linalg.norm(perp_vector2, axis=1)[:, None]
+    perp_vector2 /= np.linalg.norm(perp_vector2, axis=1)[:, None]
     
     # find the 2d projection of points onto the plane perpendicular to the LOS
-    points1_proj = np.asarray([np.sum(points1*perp_vector, axis=1), np.sum(points1*perp_vector2, axis=1)]).T
-    points2_proj = np.asarray([np.sum(points2*perp_vector, axis=1), np.sum(points2*perp_vector2, axis=1)]).T
+    points1_proj = np.einsum('ij,ij->i', points1, perp_vector)
+    points1_proj2 = np.einsum('ij,ij->i', points1, perp_vector2)
+    points2_proj = np.einsum('ij,ij->i', points2, perp_vector)
+    points2_proj2 = np.einsum('ij,ij->i', points2, perp_vector2)
     
-    return np.arctan2((points2_proj[:,0]-points1_proj[:,0]), (points2_proj[:,1]-points1_proj[:,1]))
+    return np.arctan2((points2_proj-points1_proj), (points2_proj2-points1_proj2))
 
 
 def projected_separation_ra_dec(ra1, dec1, x1, y1, z1, ra2, dec2, x2, y2, z2): 
