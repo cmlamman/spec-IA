@@ -85,9 +85,12 @@ def get_points(data):
     points = points.cartesian   # old astropy: points.representation = 'cartesian'
     return np.dstack([points.x.value, points.y.value, points.z.value])[0]
 
-def get_cosmo_points(data, cosmology=cosmo):
+def get_cosmo_points(data, cosmology=cosmo, truez=False):
     '''convert from astropy table of RA, DEC, and redshift to 3D cartesian coordinates in Mpc/h'''
-    comoving_dist = cosmo.comoving_distance(data['Z']).to(u.Mpc)
+    if truez:
+        comoving_dist = cosmo.comoving_distance(data['TRUEZ']).to(u.Mpc)
+    else:
+        comoving_dist = cosmo.comoving_distance(data['Z']).to(u.Mpc)
     points = coordinates.spherical_to_cartesian(np.abs(comoving_dist), np.asarray(data['DEC'])*u.deg, np.asarray(data['RA'])*u.deg)     # in Mpc
     return np.asarray(points).transpose() * cosmology.h                                                                                 # in Mpc/h
 

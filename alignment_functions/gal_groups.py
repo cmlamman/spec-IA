@@ -62,7 +62,7 @@ def find_components(line_iterator, max_size):
     # return list of integers
     return list(result.values())
 
-def find_groups_UnionFind(points, max_n=10, transverse_max = 0.5, los_max = 6):
+def find_groups_UnionFind(points, max_n=10, transverse_max = 0.5, los_max = 6, transverse_min=None):
     
     # find nearest neighbor for each galaxy
     tree = cKDTree(points)
@@ -76,10 +76,12 @@ def find_groups_UnionFind(points, max_n=10, transverse_max = 0.5, los_max = 6):
     transverse_seps = np.abs(get_proj_dist(points[ii[:,1]], points[ii[:,0]]))
     los_dist = np.sqrt(np.sum(points**2, axis=1))
     los_seps = np.abs(los_dist[ii[:,1]] - los_dist[ii[:,0]])
-    too_far = (transverse_seps > transverse_max) | (los_seps > los_max)
+    to_remove = (transverse_seps > transverse_max) | (los_seps > los_max)
+    if transverse_min is not None:
+        to_remove |= (transverse_seps < transverse_min)
  
-    #too_far[:,:1]=False # don't want to remove indices of centers
-    ii = ii[~too_far]  # where the pairs are too close, functionally remove them from the list of pairs
+    #to_remove[:,:1]=False # don't want to remove indices of centers
+    ii = ii[~to_remove]  # where the pairs are too close, functionally remove them from the list of pairs
     
     # find groups
     group_results = find_components([' '.join(map(str, row)) for row in ii], max_n)
@@ -172,7 +174,7 @@ def trim_groups(points, group_indices, transverse_max, los_max):
 ###############################
 
 
-def make_group_catalog(data_catalog, comoving_points=None, transverse_max = 1, los_max = 6, max_n = 100, cosmology=cosmo):
+def make_group_catalog(data_catalog, comoving_points=None, transverse_max = 1, los_max = 6, max_n = 100, cosmology=cosmo, transverse_min=None, truez=False):
     '''
     This function finds pairs of galaxies in a catalog, creats groups from the pairs, and returns a catalog of group properties.
     
@@ -183,6 +185,7 @@ def make_group_catalog(data_catalog, comoving_points=None, transverse_max = 1, l
     los_max: maximum distance in Mpc/h between galaxies along the line of sight for making pairs
     max_n: maximum number of group members. relistically this doesn't go above 10
     cosmology: astropy cosmology object
+    truez: whether to use the true redshifts, for mocks. data_catalog must have a 'TRUEZ' column.
     
     Returns
     -------
@@ -198,11 +201,14 @@ def make_group_catalog(data_catalog, comoving_points=None, transverse_max = 1, l
     
     # convert points to comoving grid, in units of Mpc/h
     if comoving_points is None:
-        comoving_points = get_cosmo_points(data_catalog, cosmology=cosmology)
+        comoving_points = get_cosmo_points(data_catalog, cosmology=cosmology) # this delibarately does not use truez
      
     # find groups with Union find
-    group_indices = find_groups_UnionFind(comoving_points, max_n = max_n, transverse_max = transverse_max, los_max = los_max)
-     
+    group_indices = find_groups_UnionFind(comoving_points, max_n = max_n, transverse_max = transverse_max, los_max = los_max, transverse_min=transverse_min)
+    
+    if truez:
+        comoving_points = get_cosmo_points(data_catalog, cosmology=cosmology, truez=truez)
+    
     group_table = Table()
     group_table['center_loc'] = [np.mean(comoving_points[cl], axis=0) for cl in group_indices]
     group_table['orientation'] = [calculate_2D_group_orientation(comoving_points[cl]) for cl in group_indices]
@@ -211,12 +217,15 @@ def make_group_catalog(data_catalog, comoving_points=None, transverse_max = 1, l
     group_table['RA'] = [data_catalog['RA'][gi[0]] for gi in group_indices]    # just using one point in the group to get RA / DEC for sorting
     group_table['DEC'] = [data_catalog['DEC'][gi[0]] for gi in group_indices]
     group_table['Z'] = [np.mean(data_catalog['Z'][gi]) for gi in group_indices]
+    if truez:
+        group_table['TRUEZ'] = [np.mean(data_catalog['TRUEZ'][gi]) for gi in group_indices]
     
     return group_table
 
 
 def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins=np.logspace(0, 2, 10), pimax=30, cosmology=cosmo, print_progress=False, 
-                        n_sky_regions=100, save_path=None, pair_max_los=6, pair_max_transverse=1, early_binning=False, keep_intermediate=True):
+                        n_sky_regions=100, save_path=None, pair_max_los=6, pair_max_transverse=1, pair_min_transverse=None, early_binning=False, keep_intermediate=False,
+                        truez=False):
     '''
     Calculate the alignment of galaxy groups within the given catalog, relative to tracers from the same catalog or other, if provided. 
     Saves results to save_path, if provided.
@@ -243,12 +252,12 @@ def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins=np.
     '''
     
     # put the catalogs for groups and tracers in comoving coordinates
-    comoving_points_groups = get_cosmo_points(catalog_for_groups, cosmology=cosmology)
+    comoving_points_groups = get_cosmo_points(catalog_for_groups, cosmology=cosmology)  # this deliberately doesn't use truez
     if catalog_for_tracers==None:
         catalog_for_tracers = catalog_for_groups
         comoving_points_tracers = comoving_points_groups
     else:
-        comoving_points_tracers = get_cosmo_points(catalog_for_tracers, cosmology=cosmology)
+        comoving_points_tracers = get_cosmo_points(catalog_for_tracers, cosmology=cosmology, truez=truez)
     try:
         catalog_for_tracers['WEIGHT']
     except KeyError:
@@ -257,7 +266,7 @@ def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins=np.
     if print_progress:
         print('Making group catalog')
     group_catalog = make_group_catalog(catalog_for_groups, comoving_points = comoving_points_groups, cosmology=cosmology, 
-                                       los_max=pair_max_los, transverse_max=pair_max_transverse)
+                                       los_max=pair_max_los, transverse_max=pair_max_transverse, transverse_min=pair_min_transverse, truez=truez)
         
     if print_progress:
         print('Measuring alignment')
@@ -320,7 +329,7 @@ def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins=np.
 
 
 def get_group_alignment_randoms(catalog_for_groups, random_catalog_paths, R_bins, pimax=30, cosmology=cosmo, print_progress=False, 
-                        n_sky_regions=100, save_path=None):
+                        n_sky_regions=100, save_path=None, pair_max_los=6, pair_max_transverse=1, pair_min_transverse=None, early_binning=False, keep_intermediate=False):
     '''
     Simillar to get_group_alignment, but calculates the alignment of galaxy groups within the given catalog relative to multiple random catalogs.
     random_catalog_paths: list of paths to random catalogs
@@ -329,7 +338,7 @@ def get_group_alignment_randoms(catalog_for_groups, random_catalog_paths, R_bins
         raise ValueError('save_path must be provided')
     
     n_random_catalogs = len(random_catalog_paths)
-    group_catalog = make_group_catalog(catalog_for_groups, cosmology=cosmology)
+    group_catalog = make_group_catalog(catalog_for_groups, cosmology=cosmology, los_max=pair_max_los, transverse_max=pair_max_transverse, transverse_min=pair_min_transverse)
 
     rand_signal = []
     for rand_batch in range(n_random_catalogs):
@@ -341,33 +350,70 @@ def get_group_alignment_randoms(catalog_for_groups, random_catalog_paths, R_bins
         random_catalog['WEIGHT'] = np.ones(len(random_catalog))
         random_catalog['Z'] = catalog_for_groups['Z']
 
-        random_points = get_cosmo_points(random_catalog)  # convert to comoving cartesian points in Mpc/h, assumes observer is at orgin
-
-        if use_sliding_pimax:
-            group_seps, group_paRel, weights, group_los = rel_angle_regions(group_catalog, loc_tracers = random_points, tracer_weights = random_catalog['WEIGHT'],
-                                                            n_regions=n_sky_regions, pimax=np.max(pimax), max_proj_sep=max_proj_sep, max_neighbors=max_neighbors, return_los=True)
-        else:
-            group_seps, group_paRel, weights = rel_angle_regions(group_catalog, loc_tracers = random_points, tracer_weights = random_catalog['WEIGHT'],
-                                                            n_regions=n_sky_regions, pimax=np.max(pimax), max_proj_sep=max_proj_sep, max_neighbors=max_neighbors, return_los=False)
-            group_los = None
+        comoving_points_tracers = get_cosmo_points(random_catalog)  # convert to comoving cartesian points in Mpc/h, assumes observer is at orgin
+            
+            
+        if print_progress:
+            print('Measuring alignment')
         
-        sep_bins, relAng_plot, relAng_plot_e = bin_region_results(group_seps, group_paRel, all_weights = weights, nbins=n_Rbins, log_bins=True, use_sliding_pimax=use_sliding_pimax, los_sep=group_los)
-        rand_signal.append(relAng_plot)
+        if early_binning:
+            try:
+                intermediate_save_paths = save_path.split('.')[-2]
+            except:
+                print('Save path must be provided to use early binning')
+                return None
+            
+            rel_angle_regions_binned(group_catalog, loc_tracers = comoving_points_tracers,  tracer_weights = random_catalog['WEIGHT'],
+                                                        R_bins=R_bins, n_regions=n_sky_regions, pimax=pimax, keep_as_regions=False, print_progress=False, 
+                                                        intermediate_save_paths=intermediate_save_paths)
+            # reading in the calculated results
+            if print_progress:
+                print('Reading in region results')
+            region_paths = glob.glob(intermediate_save_paths + '*.npy')
+            all_pa_rels = np.asarray([np.load(region_path) for region_path in region_paths])
+            relAng = np.nanmean(all_pa_rels, axis=0)
+            #relAng_e = np.nanstd(all_pa_rels, axis=0) / np.sqrt(len(all_pa_rels))
+            # remove intermediate files
+            if not keep_intermediate:
+                for region_path in region_paths:
+                    os.remove(region_path)
+            rand_signal.append(relAng)
+            
+        else:
+            max_proj_sep = np.max(R_bins)
+            n_Rbins = len(R_bins) - 1
+            
+            # if pimax is not a single value...
+            if isinstance(pimax, (int, float)):
+                group_seps, group_paRel, weights = rel_angle_regions(group_catalog, loc_tracers = comoving_points_tracers, tracer_weights = random_catalog['WEIGHT'],
+                                                                n_regions=n_sky_regions, pimax=pimax, max_proj_sep=max_proj_sep, return_los=False)
+                group_los = None
+                use_sliding_pimax = False
+            else:
+                group_seps, group_paRel, weights, group_los = rel_angle_regions(group_catalog, loc_tracers = comoving_points_tracers, tracer_weights = random_catalog['WEIGHT'],
+                                                                n_regions=n_sky_regions, pimax=np.max(pimax), max_proj_sep=max_proj_sep, return_los=True)
+                use_sliding_pimax = True
+            
+            sep_bins, relAng, relAng_e = bin_region_results(group_seps, group_paRel, all_weights = weights, nbins=n_Rbins, log_bins=True, use_sliding_pimax=use_sliding_pimax, los_sep=group_los)
+            rand_signal.append(relAng)
+        
+        
+        
 
     # saving randoms
     print('Saving signal from randoms to', save_path)
-    randoms_results = Table()
-    randoms_results['R_bin_min'] = sep_bins[:-1]
-    randoms_results['R_bin_max'] = sep_bins[1:]
-    randoms_results['relAng_plot'] = np.mean(np.asarray(rand_signal), axis=0)
-    randoms_results['relAng_plot_e'] = np.std(np.asarray(rand_signal), axis=0) / np.sqrt(len(rand_signal))
-    if use_sliding_pimax==False:
-        randoms_results['pimax'] = [pimax] * len(sep_bins[:-1])
+    results = Table()
+    results['R_bin_min'] = R_bins[:-1]
+    results['R_bin_max'] = R_bins[1:]
+    results['relAng_plot'] = np.mean(np.asarray(rand_signal), axis=0)
+    results['relAng_plot_e'] = np.std(np.asarray(rand_signal), axis=0) / np.sqrt(len(rand_signal))
+    if isinstance(pimax, (int, float)):
+        results['pimax'] = [pimax] * len(R_bins[:-1])
     else:
-        bin_centers = (sep_bins[:-1] + sep_bins[1:]) / 2
-        randoms_results['pimax'] = sliding_pimax(bin_centers)
+        results['pimax'] = pimax
     
-    randoms_results.write(save_path, overwrite=True)
+    results.write(save_path, overwrite=True)
+    print('Results saved to ', save_path) 
     
     
 def get_group_2pt_projected_corr(catalog, random_paths, catalog2=None, tracer_catalog=None, rp_bins=np.logspace(0, np.log10(150), 11), rpar_bins=np.linspace(0, 80, 101), 

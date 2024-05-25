@@ -378,6 +378,10 @@ def process_in_batches(func, array, batch_size):
         result.append(func(batch))
     return np.concatenate(result)
 
+def square_sum(coords):
+    coords = coords**2
+    coords = np.sum(coords, axis=1)
+    return np.sqrt(coords)
 
 def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers, loc_weights, R_bins, pimax, print_progress=False):
     '''
@@ -421,14 +425,8 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
     if print_progress: print('calculating distances')
     
     # breaking it up to save memory
-    nc = neighbor_coords**2
-    nc = np.sum(nc, axis=1)
-    dist_to_orgin_loc = np.sqrt(nc)
-    del nc
-    cc = center_coords**2
-    cc = np.sum(cc, axis=1)
-    dist_to_orgin_ang = np.sqrt(cc)
-    del cc
+    dist_to_orgin_loc = process_in_batches(lambda x: square_sum(neighbor_coords[x]), np.arange(len(center_coords)), 100000)
+    dist_to_orgin_ang = process_in_batches(lambda x: square_sum(center_coords[x]), np.arange(len(center_coords)), 100000)
     
     if print_progress: print('calculating separations')
     dist_to_orgin_loc -= dist_to_orgin_ang
@@ -442,18 +440,18 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
     # pairs to keep.
     R_min = np.min(R_bins); 
     R_max = np.max(R_bins)
-    i_keep = (proj_dist > R_min)    # start by keeping ones which fall within the sep bins
-    i_keep &= (proj_dist < R_max)
     
+    if print_progress: print('digitizing')
     # get the index of the bin each distance falls in
     R_bin_i = np.digitize(proj_dist, bins=R_bins) - 1                       # length of proj_dist, values are the bin index for each proj_dist
     # if pimax is a float or integer, keep pairs within that pimax
     if isinstance(pimax, (int, float)):
-        i_keep &= los_sep < pimax
+        i_keep = (proj_dist > R_min) & (proj_dist < R_max) & (los_sep < pimax)
     # if pimax is an array, keep pairs within the pimax for each bin
     elif len(pimax)==(len(R_bins)-1):
+        if print_progress: print('getting i_keep')
         pimax = np.append(pimax, np.nan)                                    # add placeholder value to pimax for pairs that fall outside the bins (won't be used)
-        i_keep &= los_sep < pimax[R_bin_i]
+        i_keep = (proj_dist > R_min) & (proj_dist < R_max) & (los_sep < pimax[R_bin_i])
     else:
         raise ValueError('pimax must be a float or array of size (len(R_bins)-1)')
     
