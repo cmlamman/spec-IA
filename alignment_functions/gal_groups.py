@@ -308,7 +308,7 @@ def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins=np.
                                                             n_regions=n_sky_regions, pimax=np.max(pimax), max_proj_sep=max_proj_sep, return_los=True)
             use_sliding_pimax = True
         
-        sep_bins, relAng, relAng_e = bin_region_results(group_seps, group_paRel, all_weights = weights, nbins=n_Rbins, log_bins=True, use_sliding_pimax=use_sliding_pimax, los_sep=group_los)
+        sep_bins, relAng, relAng_e = bin_region_results(group_seps, group_paRel, all_weights = weights, R_bins=R_bins, use_sliding_pimax=use_sliding_pimax, los_sep=group_los)
     
     results = Table()
     
@@ -394,7 +394,7 @@ def get_group_alignment_randoms(catalog_for_groups, random_catalog_paths, R_bins
                                                                 n_regions=n_sky_regions, pimax=np.max(pimax), max_proj_sep=max_proj_sep, return_los=True)
                 use_sliding_pimax = True
             
-            sep_bins, relAng, relAng_e = bin_region_results(group_seps, group_paRel, all_weights = weights, nbins=n_Rbins, log_bins=True, use_sliding_pimax=use_sliding_pimax, los_sep=group_los)
+            sep_bins, relAng, relAng_e = bin_region_results(group_seps, group_paRel, all_weights = weights, R_bins=R_bins, use_sliding_pimax=use_sliding_pimax, los_sep=group_los)
             rand_signal.append(relAng)
         
         

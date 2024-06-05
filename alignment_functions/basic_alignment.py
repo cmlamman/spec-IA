@@ -322,16 +322,12 @@ def rel_angle_regions(group_info, loc_tracers, tracer_weights=None, n_regions = 
 def sliding_pimax(r_sep):
     return 6 + (2/3)*r_sep
 
-def bin_region_results(all_proj_dists, all_pa_rels, all_weights=None, nbins=20, log_bins=False, use_sliding_pimax=False, los_sep=None):
+def bin_region_results(all_proj_dists, all_pa_rels, all_weights=None, R_bins=np.logspace(0, 2, 11), use_sliding_pimax=False, los_sep=None):
     '''
     bin the results from rel_angle_regions
     if use_sliding_pimax is True, pairs are limited to a pimax of 10 + (2/3)*proj_dists, required los_sep
     '''
-    
-    if log_bins==True:
-        sep_bins = np.logspace(0, np.log10(np.max(all_proj_dists[0])), nbins+1)     # bin edges
-    elif log_bins==False:
-        sep_bins = np.linspace(0.1, np.max(all_proj_dists[0]), nbins+1)             # bin edges
+    sep_bins = R_bins
     
     all_binned_pa_rels = []
     for i in range(len(all_proj_dists)):
@@ -575,6 +571,7 @@ def rel_angle_regions_binned(orientation_catalog, loc_tracers, tracer_weights, R
                 if os.path.exists(intermediate_save_paths+'_'+str(j)+'_'+str(n)+'.npy'):
                     n += n_in_ra_slice
                     m += n_in_ra_slice
+                    # remove all uneccesary variables from memory
                     continue
                 
             if print_progress: print('Working on region', j, n)
