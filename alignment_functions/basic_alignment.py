@@ -379,7 +379,7 @@ def square_sum(coords):
     coords = np.sum(coords, axis=1)
     return np.sqrt(coords)
 
-def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers, loc_weights, R_bins, pimax, print_progress=False):
+def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers, loc_weights, R_bins, pimax, ang_weights=None, print_progress=False):
     '''
     With especially dense regions, memory becomes an issue as the number of group-tracer matches drastically increse. 
     This function is a memory-sensitive version of calculate_rel_ang_cartesian, which bins the projected distances earlier and runs several functions in batches.
@@ -388,9 +388,11 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
     Parameters
     ----------
     ang_tracers : array, shape (n, 3)
-        3d points of tracers
+        3d points of angle tracers
     ang_values : array, shape (n)
-        orientation angles of tracers. Must be same length as ang_tracers.
+        orientation angles of angle tracers. Must be same length as ang_tracers.
+    ang_weights : array, shape (n)
+        weights of shape catalog. Must be same length as ang_tracers. Can use absolute value of ellitpticity for full-shape alignment
     loc_tracers : array, shape (m, 3)
         3d points of locations
     loc_weights : array, shape (m)
@@ -415,6 +417,8 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
     
     center_coords = np.repeat(ang_tracers, [len(i) for i in ii], axis=0)
     center_angles = np.repeat(ang_values, [len(i) for i in ii])
+    if ang_weights is not None:
+        center_weights = np.repeat(ang_weights, [len(i) for i in ii])
     neighbor_coords = loc_tracers[np.concatenate(ii)]
     neighbor_weights = loc_weights[np.concatenate(ii)]
     
@@ -477,6 +481,8 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
         n_bin = neighbor_coords[i_bin_keep]
         ca_bin = center_angles[i_bin_keep]
         weight_to_use = neighbor_weights[i_bin_keep]
+        if ang_weights is not None:
+            weight_to_use *= center_weights[i_bin_keep]
         
         if print_progress: print('calculating position angle')
         # calculate position angle in batches
@@ -484,7 +490,7 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
         position_angle = process_in_batches(lambda x: get_orientation_angle_cartesian(c_bin[x], n_bin[x]), np.arange(len(c_bin)), n_batches) 
         
         pa_rel = ca_bin - position_angle
-        # get weighted average using loc_weights
+        # get weighted average from provided weights
         pa_rel *= 2
         pa_rel = np.cos(pa_rel)
         pa_rel *= weight_to_use    
@@ -501,7 +507,7 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
 
 
 # New function that calculates realtive ellipticities but bins in sep earlier to save memory
-def rel_angle_regions_binned(orientation_catalog, loc_tracers, tracer_weights, R_bins, n_regions=100, pimax=30, 
+def rel_angle_regions_binned(orientation_catalog, loc_tracers, tracer_weights, R_bins, shape_weights=False, n_regions=100, pimax=30, 
                              keep_as_regions=False, print_progress=False, intermediate_save_paths=None):
     '''
     Divides the orientation catalog into n_regions by RA and DEC, calculate cos(2*theta) the orientations relative to the tracers
@@ -510,13 +516,16 @@ def rel_angle_regions_binned(orientation_catalog, loc_tracers, tracer_weights, R
     Parameters
     ----------
     orientation_catalog : astropy table
-        table of groups with keys 'center_loc', 'orientation', 'RA', 'DEC'
+        table of groups with keys 'center_loc', 'orientation', 'RA', 'DEC'. 
+        Optional: 'WEIGHT' - which could be absolute value of ellipticity to get full-shape alignment. Will need to set shape_weights=True.
     loc_tracers : array
         array of 3d points corresponding to the tracers
     tracer_weights : array
         weights of the tracers
     R_bins : array
         array of bin edges for the projected separaton, in Mpc/h
+    shape_weights : bool, optional
+        if True, will use the 'WEIGHT' key in the orientation catalog. Default is False.
     n_regions : int, optional
         number of sky regions to divide the data into. The default is 100. This is used to calculate standard error
     pimax : float or array, optional
@@ -583,10 +592,15 @@ def rel_angle_regions_binned(orientation_catalog, loc_tracers, tracer_weights, R
                 continue
             
             group_square = groups_dec_slice[ra_sorter[n:m]]
+            
+            ang_weights = None
+            if shape_weights==True:
+                ang_weights = group_square['WEIGHT']
 
             # returns the relative angles in each R bin for this region, array of size (len(R_bins)-1)
             pa_rel_binned = calculate_rel_ang_cartesian_binAverage(ang_tracers = group_square['center_loc'], ang_values = group_square['orientation'], 
-                                                                   loc_tracers = loc_tracers, loc_weights=tracer_weights, R_bins=R_bins, pimax=pimax, print_progress=print_progress)
+                                                                   loc_tracers = loc_tracers, loc_weights=tracer_weights, ang_weights=ang_weights, 
+                                                                   R_bins=R_bins, pimax=pimax, print_progress=print_progress)
             
             if intermediate_save_paths is not None:
                 np.save(intermediate_save_paths+'_'+str(j)+'_'+str(n)+'.npy', pa_rel_binned)
