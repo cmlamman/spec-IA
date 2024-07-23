@@ -190,10 +190,10 @@ def make_group_catalog(data_catalog, comoving_points=None, transverse_max = 1, l
     Returns
     -------
     group_table: astropy table with columns:
-    'center_loc': center of the group in comoving coordinates
+    'center_loc': center of the group in comoving coordinates, Mpc/h
     'orientation': orientation of the group in radians
     'n_group': number of members in the group
-    'max_dist_to_center': maximum distance of a group member from the center
+    'max_dist_to_center': maximum distance of a group member from the center, Mpc/h
     'RA': RA of the group center
     'DEC': DEC of the group center
     'Z': redshift of the group center
@@ -253,7 +253,7 @@ def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins=np.
     
     # put the catalogs for groups and tracers in comoving coordinates
     comoving_points_groups = get_cosmo_points(catalog_for_groups, cosmology=cosmology)  # this deliberately doesn't use truez
-    if catalog_for_tracers==None:
+    if catalog_for_tracers is None:
         catalog_for_tracers = catalog_for_groups
         comoving_points_tracers = comoving_points_groups
     else:

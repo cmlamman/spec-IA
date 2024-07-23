@@ -309,3 +309,12 @@ def get_pair_distances(catalog, indices, pos_obs=np.asarray([-3700, 0, 0])*.7, c
         deltax = np.abs(centers_m['x_L2com'][::,0] - neighbors_m['x_L2com'][::,0])
         deltayz = np.sqrt((centers_m['x_L2com'][::,1] - neighbors_m['x_L2com'][::,1])**2 + (centers_m['x_L2com'][::,2] - neighbors_m['x_L2com'][::,2])**2)
         return deltax, deltayz
+    
+    
+    # function to estimate the 3D volume of a set of points
+    from scipy.spatial import ConvexHull
+    def est_volume(points_3D, return_units=(u.Mpc**3 / u.h**3)):
+        '''input: 3D points in Mpc/h. Returns astropy quantity of volume'''
+        hull = ConvexHull(points_3D)
+        volume = hull.volume * (u.Mpc/u.h)**3
+        return volume.to(return_units)

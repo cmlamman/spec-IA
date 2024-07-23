@@ -104,7 +104,7 @@ def get_pair_distances(catalog, indices, pos_obs=np.asarray([-3700, 0, 0])*.7, c
         r_parallel = (np.abs(cosmo.comoving_distance(centers_m['Z_noRSD']) - cosmo.comoving_distance(neighbors_m['Z_noRSD'])) * 0.7 / u.Mpc).value
         s_parallel = (np.abs(cosmo.comoving_distance(centers_m['Z_withRSD']) - cosmo.comoving_distance(neighbors_m['Z_withRSD'])) * 0.7 / u.Mpc).value
         
-        r_projected = get_proj_dist(centers_m, neighbors_m, pos_obs)
+        r_projected = get_proj_dist_abacus(centers_m, neighbors_m, pos_obs)
 
         return r_projected, r_parallel, s_parallel
     

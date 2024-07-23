@@ -24,6 +24,9 @@ h = H0/100
 
 import pathlib
 parent_path = pathlib.Path.cwd().parent
+if 'IA' not in str(parent_path):   # for working in other directories. May need to rename "IA" to wherever spec-IA is located.
+    parent_path = parent_path / 'IA'
+    print('Parent path is not the IA directory. Assuming parent directory is IA')
 
 # reading in a file for the power spectrum
 ps_path = parent_path / 'spec-IA/example_data/AbacusSummit_base_c000_z0.800_power_nfft2048.csv' #ps_path = parent_path / 'spec-IA/example_data/AbacusSummit_base_c000_z0.800_power_nfft2048.csv'
