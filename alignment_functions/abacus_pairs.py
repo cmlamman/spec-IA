@@ -15,9 +15,17 @@ from alignment_functions.basic_alignment import get_pair_distances, get_rel_es
 from astropy.table import Table
 from scipy.spatial import cKDTree
 import numpy as np
+import os
 
 def generate_IA_pairs(abacus_catalog, save_name, max_los_dist=100, max_proj_dist=100, max_neighbors=6400, overwrite=True, n_batches=10):
     
+    last_batch_name = batch_name = save_name+"_batch"+str(n_batches)+'.fits'
+    if overwrite==False:
+        # check if file exists
+        if os.path.exists(batch_name):
+            print('Files exist for all batches, exiting ')
+            return None
+            
     # make tree of entire catalog
     tree = cKDTree(abacus_catalog['x_L2com'])
     
@@ -33,6 +41,12 @@ def generate_IA_pairs(abacus_catalog, save_name, max_los_dist=100, max_proj_dist
     dist_upper_bound = np.sqrt(max_los_dist**2 + max_proj_dist**2) + 20 # adding a bit to make sure include ones smeared from FOG
     
     for i in range(n_batches):
+        batch_name = save_name+"_batch"+str(i)+'.fits'
+        if overwrite==False:
+            # check if file exists
+            if os.path.exists(batch_name):
+                continue
+            
         center_batch = abacus_centers[i*len(abacus_centers)//n_batches:(i+1)*len(abacus_centers)//n_batches]
         
         # find pairs
@@ -53,7 +67,7 @@ def generate_IA_pairs(abacus_catalog, save_name, max_los_dist=100, max_proj_dist
         ii_keep = ((pair_results['r_p']<max_proj_dist)&(pair_results['r_par']<max_los_dist))
         pair_results = pair_results[ii_keep]  ### to improve code, this cut should be done before calculating s_par and e1_rel
         
-        pair_results.write(save_name+"_batch"+str(i)+'.fits', overwrite=overwrite)
+        pair_results.write(batch_name, overwrite=overwrite)
     
     return None
     
