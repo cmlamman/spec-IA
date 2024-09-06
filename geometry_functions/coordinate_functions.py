@@ -38,6 +38,9 @@ def remove_astropyu(values_list, unit=u.Mpc):
         return [v.to(u.Mpc).value for v in values_list]
     else:
         return values_list
+    
+def get_mu(r_p, r_par):
+    return np.cos(np.arctan2(r_p, r_par))
 
 ###########################################################################################################
 # CALCULATING RELATIVE SEPARATIONS AND ANGLES

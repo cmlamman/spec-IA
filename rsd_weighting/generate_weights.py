@@ -71,7 +71,7 @@ def get_rsd_ia_weights(cf_binned, ia_binned):
     Returns: a 2D array of weights, same size as input arrays
     '''
     
-    # find the total signal in each bin of r_p (i.e. "rp slice") and the the weight in each r_par bin for each slice
+    # find the total signal in each bin of r_p (i.e. "rp slice") and then the weight in each r_par bin for each slice
     weight_array = np.zeros_like(cf_binned)
     
     slice_sum = np.sum(ia_binned**2 / (1 + cf_binned), axis=1)  # for each bin in r_p
@@ -89,5 +89,5 @@ def get_projected_weighted_signal(signal_2d, weights_2d):
     weights_2d, a 2D array of the weights binned in r_p and r_par. size (nrp_bins, npar_bins)
     Returns: a 1D array of the weighted signal, binned in r_p
     '''
-    weighted_average = np.nansum(signal_2d * weights_2d, axis=1) / np.nansum(weights_2d, axis=1)
+    weighted_average = np.nansum(signal_2d * weights_2d, axis=1) / np.nansum(weights_2d, axis=1)  # I THINK THIS IS WRONG(?)
     return weighted_average
