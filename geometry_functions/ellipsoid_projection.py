@@ -24,6 +24,7 @@ def format_ellipsoid_abacus(eigenvectors, eigenvalues, position = np.asarray([0,
 
 
 def get_projected_shape_sphere(el, x_projection=False):
+    # update: el object could include center instead of ra, dec and then use that for rotation.
     '''
     Project ellipse onto plane of sky. Assumes that the LOS lies along x axis.
     el: astropy table with ellipsoid parameters, including RA and DEC
@@ -42,10 +43,13 @@ def get_projected_shape_sphere(el, x_projection=False):
     # getting rotation vectors
     rot_z = R.from_rotvec(np.asarray([0, 0, e_RA]))
     rot_y = R.from_rotvec(np.asarray([0, e_DEC, 0]))
+    
+    #rot = R.from_rotvec(vector_to_center)
         
     # eigen vectors and eigen values of triaxial ellipsoid
     evc0 = np.array([el['sigman_eigenvecsMaj_L2com'], el['sigman_eigenvecsMid_L2com'], el['sigman_eigenvecsMin_L2com']])
     evc = np.matmul(rot_y.as_matrix(), np.matmul(rot_z.as_matrix(), evc0.transpose())).transpose()
+    #evc = np.matmul(rot.as_matrix(), evc0.transpose()).transpose()
     
     evl = el['sigman_L2com']**2
     
