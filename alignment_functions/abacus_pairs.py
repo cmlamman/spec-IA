@@ -18,8 +18,9 @@ import numpy as np
 import os
 
 def generate_IA_pairs(abacus_catalog, save_name, max_los_dist=100, max_proj_dist=100, max_neighbors=6400, overwrite=True, n_batches=10):
+    '''assumes galaxies are in a light cone centered on RA=0, DEC=0, z=0.8'''
     
-    last_batch_name = batch_name = save_name+"_batch"+str(n_batches)+'.fits'
+    batch_name = save_name+"_batch"+str(n_batches)+'.fits'
     if overwrite==False:
         # check if file exists
         if os.path.exists(batch_name):
@@ -29,10 +30,10 @@ def generate_IA_pairs(abacus_catalog, save_name, max_los_dist=100, max_proj_dist
     # make tree of entire catalog
     tree = cKDTree(abacus_catalog['x_L2com'])
     
-    # drawing centers from area with uniform survey geometry
+    # drawing centers from area well with uniform survey geometry
     abacus_centers = abacus_catalog[(
-        (abacus_catalog['Z'] < 0.95) &
-        (abacus_catalog['Z'] > 0.58) & 
+        (abacus_catalog['Z_noRSD'] < 1.3) &  # used to be just "Z", .95
+        (abacus_catalog['Z_noRSD'] > 0.7) &   # .58
         (np.abs(abacus_catalog['RA'])<10) & 
         (np.abs(abacus_catalog['DEC'])<10))]
     # randomize order or abacus_centers

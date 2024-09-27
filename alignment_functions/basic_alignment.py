@@ -72,7 +72,7 @@ def get_proj_dist_abacus(cat1, cat2, pos_obs=np.asarray([-3700, 0, 0])*.7):
     return np.linalg.norm(transverse_v, axis=1)
 
 
-def get_pair_distances(catalog, indices, pos_obs=np.asarray([-3700, 0, 0])*.7, cartesian=False):
+def get_pair_distances(catalog, indices, pos_obs=np.asarray([-3700, 0, 0])*.7, cartesian=False, use_RSD=True):
     '''
     Calculate distances between input pairs, coordinates in Mpc/h
     -------------------------------------------------------------
@@ -100,13 +100,15 @@ def get_pair_distances(catalog, indices, pos_obs=np.asarray([-3700, 0, 0])*.7, c
     neighbors_m = catalog[ni]   # excluding the centers
     
     if cartesian==False:
-        
-        r_parallel = (np.abs(cosmo.comoving_distance(centers_m['Z_noRSD']) - cosmo.comoving_distance(neighbors_m['Z_noRSD'])) * 0.7 / u.Mpc).value
-        s_parallel = (np.abs(cosmo.comoving_distance(centers_m['Z_withRSD']) - cosmo.comoving_distance(neighbors_m['Z_withRSD'])) * 0.7 / u.Mpc).value
-        
         r_projected = get_proj_dist_abacus(centers_m, neighbors_m, pos_obs)
 
-        return r_projected, r_parallel, s_parallel
+        if use_RSD == False:
+            r_parallel = (np.abs(cosmo.comoving_distance(centers_m['Z']) - cosmo.comoving_distance(neighbors_m['Z'])) * 0.7 / u.Mpc).value
+            return r_projected, r_parallel
+        else:
+            r_parallel = (np.abs(cosmo.comoving_distance(centers_m['Z_noRSD']) - cosmo.comoving_distance(neighbors_m['Z_noRSD'])) * 0.7 / u.Mpc).value
+            s_parallel = (np.abs(cosmo.comoving_distance(centers_m['Z_withRSD']) - cosmo.comoving_distance(neighbors_m['Z_withRSD'])) * 0.7 / u.Mpc).value
+            return r_projected, r_parallel, s_parallel
     
     elif cartesian==True:
         deltax = np.abs(centers_m['x_L2com'][::,0] - neighbors_m['x_L2com'][::,0])
@@ -193,7 +195,7 @@ def get_rel_es(catalog, indices, data_weights=None, weights=None, rcolor='rw1', 
         elif return_sep==False:
             return e1_re, e2_rel, all_ws
 
-def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, loc_weights=None, pimax = 20, max_proj_sep = 30, max_neighbors=100, return_los=False, print_progress=False):
+def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, loc_weights=None, pimax = 20, max_proj_sep = 30, max_neighbors=100, return_los=False, print_progress=False, tracer_behind=False):
     '''ang and loc tracers are 3d points. ang_values are orientation angles of ang_tracers 
     - pimax (float, optional): Maximum line-of-sight separation for pairs of galaxies in Mpc/h. Default is 30.
     '''
@@ -379,7 +381,7 @@ def square_sum(coords):
     coords = np.sum(coords, axis=1)
     return np.sqrt(coords)
 
-def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers, loc_weights, R_bins, pimax, E_ABS, print_progress=False):
+def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers, loc_weights, R_bins, pimax, E_ABS, print_progress=False, tracer_behind=False):
     '''
     With especially dense regions, memory becomes an issue as the number of group-tracer matches drastically increse. 
     This function is a memory-sensitive version of calculate_rel_ang_cartesian, which bins the projected distances earlier and runs several functions in batches.
@@ -454,6 +456,10 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
     else:
         raise ValueError('pimax must be a float or array of size (len(R_bins)-1)')
     
+    if tracer_behind==True:
+        # only keeping pairs where the tracer is behind the shape, to avoid lensing effects
+        i_keep &= (dist_to_orgin_loc>0)
+    
     if print_progress: print('calculating relative angles in each R_bin')
     rel_angles = []
     # return average in each bin
@@ -507,7 +513,7 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
 
 # New function that calculates realtive ellipticities but bins in sep earlier to save memory
 def rel_angle_regions_binned(orientation_catalog, loc_tracers, tracer_weights, R_bins, use_E_ABS=False, n_regions=100, pimax=30, 
-                             keep_as_regions=False, print_progress=False, intermediate_save_paths=None):
+                             keep_as_regions=False, print_progress=False, intermediate_save_paths=None, tracer_behind=False):
     '''
     Divides the orientation catalog into n_regions by RA and DEC, calculate cos(2*theta) the orientations relative to the tracers
     in bins of projected separation on the sky, R_bins. The measurement in each bin is measured relative to the full tracer sample.
@@ -599,7 +605,7 @@ def rel_angle_regions_binned(orientation_catalog, loc_tracers, tracer_weights, R
             # returns the relative angles in each R bin for this region, array of size (len(R_bins)-1)
             pa_rel_binned = calculate_rel_ang_cartesian_binAverage(ang_tracers = group_square['center_loc'], ang_values = group_square['orientation'], 
                                                                    loc_tracers = loc_tracers, loc_weights=tracer_weights, E_ABS=E_ABS, 
-                                                                   R_bins=R_bins, pimax=pimax, print_progress=print_progress)
+                                                                   R_bins=R_bins, pimax=pimax, print_progress=print_progress, tracer_behind=tracer_behind)
             
             if intermediate_save_paths is not None:
                 np.save(intermediate_save_paths+'_'+str(j)+'_'+str(n)+'.npy', pa_rel_binned)

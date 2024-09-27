@@ -1,7 +1,10 @@
 import numpy as np
 from astropy.table import Table
 from scipy.spatial.transform import Rotation as R
-from ..geometry_functions.sky_functions import deg_to_rad
+try:
+    from ..geometry_functions.coordinate_functions import deg_to_rad
+except ValueError:
+    from geometry_functions.coordinate_functions import deg_to_rad
 
 '''
 Functions to format and project triaxial ellipsoids
