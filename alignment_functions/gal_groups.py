@@ -267,7 +267,8 @@ def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins=np.
         print('Making group catalog')
     group_catalog = make_group_catalog(catalog_for_groups, comoving_points = comoving_points_groups, cosmology=cosmology, 
                                        los_max=pair_max_los, transverse_max=pair_max_transverse, transverse_min=pair_min_transverse, truez=truez)
-        
+    if print_progress:
+        print('Number of groups found:', len(group_catalog))
     if print_progress:
         print('Measuring alignment')
     
@@ -332,24 +333,36 @@ def get_group_alignment_randoms(catalog_for_groups, random_catalog_paths, R_bins
                         n_sky_regions=100, save_path=None, pair_max_los=6, pair_max_transverse=1, pair_min_transverse=None, early_binning=False, keep_intermediate=False):
     '''
     Simillar to get_group_alignment, but calculates the alignment of galaxy groups within the given catalog relative to multiple random catalogs.
-    random_catalog_paths: list of paths to random catalogs
+    random_catalog_paths: list of paths to random catalogs. 
+    If input for random_catalog_paths is an integer, code will automatically generate that many random catalogs from the data by shuffling Z.
     '''
     if save_path is None:
         raise ValueError('save_path must be provided')
     
-    n_random_catalogs = len(random_catalog_paths)
     group_catalog = make_group_catalog(catalog_for_groups, cosmology=cosmology, los_max=pair_max_los, transverse_max=pair_max_transverse, transverse_min=pair_min_transverse)
 
     rand_signal = []
+    # check if random_catalog_paths is an integer
+    if isinstance(random_catalog_paths, int):
+        n_random_catalogs = random_catalog_paths
+    else:
+        n_random_catalogs = len(random_catalog_paths)
+    
     for rand_batch in range(n_random_catalogs):
         print('Working on random batch', rand_batch, 'of', n_random_catalogs)
         
-        random_catalog = Table.read(random_catalog_paths[rand_batch])
-        random_catalog.keep_columns(['RA', 'DEC'])
-        random_catalog = random_catalog[(np.random.choice(len(random_catalog), len(catalog_for_groups), replace=False))]
+        if isinstance(random_catalog_paths, int):
+            random_catalog = Table()
+            random_catalog['RA'] = catalog_for_groups['RA']
+            random_catalog['DEC'] = catalog_for_groups['DEC']
+            random_catalog['Z'] = np.random.permutation(catalog_for_groups['Z'])
+        elif isinstance(random_catalog_paths, list):
+            random_catalog = Table.read(random_catalog_paths[rand_batch])
+            random_catalog.keep_columns(['RA', 'DEC'])
+            random_catalog = random_catalog[(np.random.choice(len(random_catalog), len(catalog_for_groups), replace=False))]
+            random_catalog['Z'] = catalog_for_groups['Z']
+        
         random_catalog['WEIGHT'] = np.ones(len(random_catalog))
-        random_catalog['Z'] = catalog_for_groups['Z']
-
         comoving_points_tracers = get_cosmo_points(random_catalog)  # convert to comoving cartesian points in Mpc/h, assumes observer is at orgin
             
             

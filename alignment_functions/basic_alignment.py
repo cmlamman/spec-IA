@@ -491,6 +491,7 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
         if print_progress: print('calculating position angle')
         # calculate position angle in batches
         n_batches = int(len(c_bin)/100)
+        if n_batches==0: n_batches=1
         position_angle = process_in_batches(lambda x: get_orientation_angle_cartesian(c_bin[x], n_bin[x]), np.arange(len(c_bin)), n_batches) 
         
         pa_rel = ca_bin - position_angle
