@@ -225,7 +225,7 @@ def make_group_catalog(data_catalog, comoving_points=None, transverse_max = 1, l
 
 def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins=np.logspace(0, 2, 10), pimax=30, cosmology=cosmo, print_progress=False, 
                         n_sky_regions=100, save_path=None, pair_max_los=6, pair_max_transverse=1, pair_min_transverse=None, early_binning=False, keep_intermediate=False,
-                        truez=False):
+                        truez=False, intermediate_save_paths=None):
     '''
     Calculate the alignment of galaxy groups within the given catalog, relative to tracers from the same catalog or other, if provided. 
     Saves results to save_path, if provided.
@@ -267,17 +267,18 @@ def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins=np.
         print('Making group catalog')
     group_catalog = make_group_catalog(catalog_for_groups, comoving_points = comoving_points_groups, cosmology=cosmology, 
                                        los_max=pair_max_los, transverse_max=pair_max_transverse, transverse_min=pair_min_transverse, truez=truez)
-    if print_progress:
-        print('Number of groups found:', len(group_catalog))
+    #if print_progress:
+    print('Number of multipelts found:', len(group_catalog))
     if print_progress:
         print('Measuring alignment')
     
     if early_binning:
-        try:
-            intermediate_save_paths = save_path.split('.')[-2]
-        except:
-            print('Save path must be provided to use early binning')
-            return None
+        if intermediate_save_paths is None:
+            try:
+                intermediate_save_paths = save_path.split('.fits')[0]
+            except:
+                print('Save path must be provided to use early binning')
+                return None
         
         rel_angle_regions_binned(group_catalog, loc_tracers = comoving_points_tracers,  tracer_weights = catalog_for_tracers['WEIGHT'],
                                                     R_bins=R_bins, n_regions=n_sky_regions, pimax=pimax, keep_as_regions=False, print_progress=print_progress, 
@@ -330,7 +331,7 @@ def get_group_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins=np.
 
 
 def get_group_alignment_randoms(catalog_for_groups, random_catalog_paths, R_bins, pimax=30, cosmology=cosmo, print_progress=False, 
-                        n_sky_regions=100, save_path=None, pair_max_los=6, pair_max_transverse=1, pair_min_transverse=None, early_binning=False, keep_intermediate=False):
+                        n_sky_regions=100, save_path=None, pair_max_los=6, pair_max_transverse=1, pair_min_transverse=None, early_binning=False, keep_intermediate=False, intermediate_save_paths=None):
     '''
     Simillar to get_group_alignment, but calculates the alignment of galaxy groups within the given catalog relative to multiple random catalogs.
     random_catalog_paths: list of paths to random catalogs. 
@@ -370,11 +371,12 @@ def get_group_alignment_randoms(catalog_for_groups, random_catalog_paths, R_bins
             print('Measuring alignment')
         
         if early_binning:
-            try:
-                intermediate_save_paths = save_path.split('.')[-2]
-            except:
-                print('Save path must be provided to use early binning')
-                return None
+            if intermediate_save_paths is None:
+                try:
+                    intermediate_save_paths = save_path.split('.fits')[0]
+                except:
+                    print('Save path must be provided to use early binning')
+                    return None
             
             rel_angle_regions_binned(group_catalog, loc_tracers = comoving_points_tracers,  tracer_weights = random_catalog['WEIGHT'],
                                                         R_bins=R_bins, n_regions=n_sky_regions, pimax=pimax, keep_as_regions=False, print_progress=False, 

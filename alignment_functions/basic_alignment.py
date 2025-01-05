@@ -562,6 +562,7 @@ def rel_angle_regions_binned(orientation_catalog, loc_tracers, tracer_weights, R
     k = n_in_dec_slice
     
     all_pa_rels = []
+    all_region_files = []
     for _ in range(n_slices):   # loop over DEC slices
         
         # for handling the last region
@@ -586,7 +587,7 @@ def rel_angle_regions_binned(orientation_catalog, loc_tracers, tracer_weights, R
                 if os.path.exists(intermediate_save_paths+'_'+str(j)+'_'+str(n)+'.npy'):
                     n += n_in_ra_slice
                     m += n_in_ra_slice
-                    # remove all uneccesary variables from memory
+                    all_region_files.append(intermediate_save_paths+'_'+str(j)+'_'+str(n)+'.npy')
                     continue
                 
             if print_progress: print('Working on region', j, n)
