@@ -141,7 +141,21 @@ def e_complex(a, b, theta):
 def a_b(e1, e2):
     '''return a and b of ellipse'''
     e = abs_e(e1, e2)
-    return 1+e, 1-e  
+    return 1+e, 1-e 
+
+def esq_to_e(e1_sq, e2_sq):
+    '''convert from definition of ellipticity which used (b/a)^2 to (b/a)'''
+    abs_sq = abs_e(e1_sq, e2_sq)
+    b_a = np.sqrt((1 - abs_sq) / (1 + abs_sq))
+    mult_factor = (b_a**2 + 1) / (b_a+1)**2
+    return e1_sq * mult_factor, e2_sq * mult_factor
+
+def e_to_esq(e1, e2):
+    '''convert from definition of ellipticity which used (b/a) to (b/a)^2'''
+    abs_ensq = abs_e(e1, e2)
+    b_a = (1 - abs_ensq) / (1 + abs_ensq)
+    mult_factor =  (b_a+1)**2 / (b_a**2 + 1)
+    return e1 * mult_factor, e2 * mult_factor 
 
 def get_rel_es(catalog, indices, data_weights=None, weights=None, rcolor='rw1', return_sep=False, j=0):
     '''
