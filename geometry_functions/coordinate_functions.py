@@ -89,7 +89,7 @@ def get_points(data):
     return np.dstack([points.x.value, points.y.value, points.z.value])[0]
 
 def get_cosmo_points(data, cosmology=cosmo, truez=False):
-    '''convert from astropy table of RA, DEC, and redshift to 3D cartesian coordinates in Mpc/h'''
+    '''convert from astropy table of RA, DEC, and Z to 3D cartesian coordinates in Mpc/h'''
     if truez:
         comoving_dist = cosmo.comoving_distance(data['TRUEZ']).to(u.Mpc)
     else:

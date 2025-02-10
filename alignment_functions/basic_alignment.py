@@ -434,8 +434,8 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
     center_coords = np.repeat(ang_tracers, [len(i) for i in ii], axis=0)
     center_angles = np.repeat(ang_values, [len(i) for i in ii])
     center_E = np.repeat(E_ABS, [len(i) for i in ii])
-    neighbor_coords = loc_tracers[np.concatenate(ii)]
-    neighbor_weights = loc_weights[np.concatenate(ii)]
+    neighbor_coords = loc_tracers[np.concatenate(ii).astype(int)]
+    neighbor_weights = loc_weights[np.concatenate(ii).astype(int)]
     
     if print_progress: print('calculating distances')
     
