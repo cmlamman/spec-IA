@@ -60,11 +60,15 @@ def D(z, norm_at_z0=False):
 #####################################################################################################
 # FUNCTION TO CONVERT BETWEEN TAU AND A_IA
 #####################################################################################################
-def tau_to_AIA(tau, z):
-    '''convert from our tau parameter to the commonly used IA amplitude parameter A_IA.'''
+def tau_to_AIA(tau, z, norm_at_z0=False):
+    '''
+    convert from our tau parameter to the commonly used IA amplitude parameter A_IA.
+    If norm_at_z0 is False, this will be normalized so \bar{D}(z) = (1+z)D(z) is 1 at matter-dominated era (z=infinity).
+    If norma_at_z1 is True, this will be normalized so D(z) is 1 at present epoch (z=0).
+    '''
     C1 = 5*10**(-14) * ((u.Mpc)**3 / h**2) / M_sun
     rho_m0 = cosmo.Om(z) * cosmo.critical_density0
-    AIA = - (tau / C1) * (D(z) / rho_m0)
+    AIA = - (tau / C1) * (D(z, norm_at_z0=norm_at_z0) / rho_m0)
     return AIA.to(u.Mpc/u.Mpc).value
 
 
