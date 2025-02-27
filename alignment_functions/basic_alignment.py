@@ -209,9 +209,12 @@ def get_rel_es(catalog, indices, data_weights=None, weights=None, rcolor='rw1', 
         elif return_sep==False:
             return e1_re, e2_rel, all_ws
 
-def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, loc_weights=None, pimax = 20, max_proj_sep = 30, max_neighbors=100, return_los=False, print_progress=False, tracer_behind=False):
+def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, abs_e=None, loc_weights=None, pimax = 20, max_proj_sep = 30, max_neighbors=100, 
+                                return_los=False, print_progress=False, tracer_behind=False, keep_as_angle=True):
     '''ang and loc tracers are 3d points. ang_values are orientation angles of ang_tracers 
     - pimax (float, optional): Maximum line-of-sight separation for pairs of galaxies in Mpc/h. Default is 30.
+    - abs_e (array, optional): can supply absolute value of ellipticity to get relative full ellipticity. If supplied, will automatically return (abs_e)*cos(2*angle)
+    - keep_as_angle : if True, returns angle only. If False, returns the relevant IA signal (cos(2*angle))
     '''
     # make tree
     tree = cKDTree(loc_tracers)
@@ -220,11 +223,14 @@ def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, loc_weight
     
     # add placeholder row to loc_tracers
     loc_tracers = np.vstack((loc_tracers, np.full(len(loc_tracers[0]), np.inf)))
-    loc_weights = np.append(loc_weights, 0)
+    if loc_weights is not None:
+        loc_weights = np.append(loc_weights, 0)
     
     center_coords = np.repeat(ang_tracers, [len(i) for i in ii], axis=0)
     center_angles = np.repeat(ang_values, [len(i) for i in ii])
     neighbor_coords = loc_tracers[np.concatenate(ii)]
+    if abs_e is not None:
+        center_abs_e = np.repeat(abs_e, [len(i) for i in ii])
     
     # breaking it up to save memory
     nc = neighbor_coords**2
@@ -250,6 +256,10 @@ def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, loc_weight
     position_angle = get_orientation_angle_cartesian(center_coords, neighbor_coords)
     
     pa_rel = center_angles[pairs_to_keep] - position_angle
+    if abs_e is not None:
+        pa_rel = center_abs_e[pairs_to_keep] * np.cos(2 * np.asarray((pa_rel)))
+    elif keep_as_angle == False:
+        pa_rel = np.cos(2* np.asarray((pa_rel)))
     
     if loc_weights is None and return_los==False:
         return proj_dist[pairs_to_keep], pa_rel
@@ -341,8 +351,10 @@ def sliding_pimax(r_sep):
 def bin_region_results(all_proj_dists, all_pa_rels, all_weights=None, R_bins=np.logspace(0, 2, 11), use_sliding_pimax=False, los_sep=None):
     '''
     bin the results from rel_angle_regions
+    R_bins: bin edges for the projected separation, in Mpc/h
     if use_sliding_pimax is True, pairs are limited to a pimax of 10 + (2/3)*proj_dists, required los_sep
     '''
+    
     sep_bins = R_bins
     
     all_binned_pa_rels = []
