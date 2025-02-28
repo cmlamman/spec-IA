@@ -22,6 +22,18 @@ def fit_gaussians(rpar_bins, measured_weight, n_gaussians=1, amp_max=np.inf):
         popt = [np.nan]*len(p0)
     return popt
 
+# fourier transforms of gaussians built to be quick for integration
+def get_gauss_sum_fs_1D(kz, *params):
+    '''Fourier transform version of gaussian sum. parameters of form amp1, width1 in real space'''
+    return params[1]*np.exp(-kz**2 * params[1]**2 / 2)
+
+def get_gauss_sum_fs_3D(kz, *params):
+    '''Fourier transform version of gaussian sum. parameters of form amp1, width1, amp2, width2, ... in real space'''
+    g1 = params[0] * params[1] * np.exp(-kz**2 * params[1]**2 / 2)
+    g2 = params[2] * params[3] * np.exp(-kz**2 * params[3]**2 / 2)
+    g3 = params[4] * params[5] * np.exp(-kz**2 * params[5]**2 / 2)
+    return g1 + g2 + g3
+
 
 def bin_relE_results(all_proj_dists, all_pa_rels, all_los_dists=None, all_weights=None, R_bins=np.logspace(0, 2, 11), pimax = 30, pimax_weights=None):
     '''

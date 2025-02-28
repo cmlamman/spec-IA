@@ -77,7 +77,7 @@ def tau_to_AIA(tau, z, norm_at_z0=False):
 #####################################################################################################
 
 
-def precompute_kz_integral(pimax_values, PS_data = abacus_ps_nl, directory=str(kz_spline_parent_paths), PS_min = 1e-4, PS_max = 2e2, n_samples=1000, warning_handling='once'):
+def precompute_kz_integral(pimax_values, PS_data, directory, PS_min = 1e-4, PS_max = 2e2, n_samples=100, warning_handling='once', pi_weighting=False, gauss_params=None, pimax_rp=None, overwrite=True):
     '''
     Precompute the integral of the kz integral and save a spline as a function of K (in log space)
     This is used to speed up the calculation of rel_e_to_tau.
@@ -89,45 +89,82 @@ def precompute_kz_integral(pimax_values, PS_data = abacus_ps_nl, directory=str(k
     directory: string. Directory path to save the spline files.
     PS_min, PS_max: floats. Range of k to use for the power spectrum [h/Mpc]
     n_samples: int. Number of samples to use for the spline. For a better integration, this function will add a few more to better sample where sincx = 0
-    
+    gauss_params: array of shape (2n,). Parameters for the gaussian fit. If pi_weighting = True, this is the parameters for the gaussian fit to the 2D correlation function.
+                  will use parameters as sigma1, width1, sigma2, width2, etc.
     RETURNS:
     ------------------
     None. Saves the spline files in the directory.
     '''
+    
+    if overwrite == False:
+        if pi_weighting == False:
+            if all([os.path.exists(directory+'/kz_integral_NL_spl_pimax_'+str(pmi)+'.npy') for pmi in pimax_values]):
+                print('All files exist. Skipping')
+                return None
+        else:
+            if os.path.exists(directory+'/kz_integral_NL_spl_Wpimaxrp_'+str(pimax_rp)+'.pkl'):
+                print('File exists. Skipping')
+                return None
+    
     warnings.filterwarnings(warning_handling)
     
     # using interpolation to get P(k)
     tck_PS = interpolate.splrep(np.log10(PS_data['k']), np.log10(PS_data['P']), s=4e-3)
+    
     def get_PS(k):
         return 10**(interpolate.splev(np.log10(k), tck_PS))
 
-    def kz_integrand(kz, K, pimax):
-        '''does not include front constant of b_gal * pimax / pi'''
-        k_squared = kz**2 + K**2
-        sinc_value = scipy.special.sinc( (kz * pimax) / np.pi )  # THIS SCIPY SINC INCLUDES PI NORMALIZATION > MUST DIVIDE BY PI
-        return get_PS(np.sqrt(k_squared)) * (K**2 / k_squared) * sinc_value
-
+    if pi_weighting == False:
+        def kz_integrand(kz, K, pimax):
+            '''does not include front constant of b_gal * pimax / pi'''
+            k_squared = kz**2 + K**2
+            sinc_value = scipy.special.sinc( (kz * pimax) / np.pi )  # THIS SCIPY SINC INCLUDES PI NORMALIZATION > MUST DIVIDE BY PI
+            return get_PS(np.sqrt(k_squared)) * (K**2 / k_squared) * sinc_value
+    else:
+        n_gaussians = int(len(gauss_params) / 2)
+        if n_gaussians == 1:
+            def kz_integrand(kz, K):
+                k_squared = kz**2 + K**2
+                gaussian_sum_fs = get_gauss_sum_fs_1D(kz, *gauss_params)
+                return get_PS(np.sqrt(k_squared)) * (K**2 / k_squared) * gaussian_sum_fs
+        elif n_gaussians == 3:
+            def kz_integrand(kz, K):
+                k_squared = kz**2 + K**2
+                gaussian_sum_fs = get_gauss_sum_fs_3D(kz, *gauss_params) 
+                return get_PS(np.sqrt(k_squared)) * (K**2 / k_squared) * gaussian_sum_fs
+        else:
+            raise ValueError('Only 1 or 3 gaussians supported')
 
     Ks_sample_values = np.logspace(np.log10(PS_min), np.log10(PS_max), n_samples)    
     
-    # For better integration: adding more samples around where sincx = 0
-    n_pi_steps = 1000 # must be integer
-    max_pi = 1e3  # must be integer
-    min_pi = 1e1  # must be integer
-    Ks_extra_values = (np.arange(0, n_pi_steps) * np.pi * max_pi/(3*n_pi_steps)) + float(int(min_pi/np.pi))*np.pi
-    Ks_sample_values = np.sort(np.concatenate((Ks_sample_values, Ks_extra_values)))
+    if pi_weighting == False:# or pi_weighting == True:
+        # For better integration: adding more samples around where sincx = 0
+        n_pi_steps = 1000 # must be integer
+        max_pi = 1e3  # must be integer
+        min_pi = 1e1  # must be integer
+        Ks_extra_values = (np.arange(0, n_pi_steps) * np.pi * max_pi/(3*n_pi_steps)) + float(int(min_pi/np.pi))*np.pi
+        Ks_sample_values = np.sort(np.concatenate((Ks_sample_values, Ks_extra_values)))
     
-    for pmi in pimax_values:
+    if pi_weighting == False:
+        for pmi in pimax_values:
+            kz_integral_values = []
+            for K in Ks_sample_values:
+                kz_integral_values.append(scipy.integrate.romberg(kz_integrand, a=PS_min, b=PS_max, args=[K, pmi], rtol=1.48e-8, divmax=15)) # integrate over kz
+            tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=1e-3)
+            
+            # save the spline
+            print('saving for pimax =', pmi)
+            np.save(directory+'/kz_integral_NL_spl_pimax_'+str(pmi)+'.npy', tck_kz_integral)
+    
+    else:
         kz_integral_values = []
         for K in Ks_sample_values:
-            kz_integral_values.append(scipy.integrate.romberg(kz_integrand, a=PS_min, b=PS_max, args=[K, pmi], rtol=1.48e-8, divmax=15)) # integrate over kz
+            value = scipy.integrate.romberg(kz_integrand, a=PS_min, b=PS_max, args=[K], rtol=1.48e-8, divmax=15)
+            kz_integral_values.append(value) # integrate over kz
         tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=1e-3)
-        
-        # save the spline
-        if isinstance(tck_kz_integral, tuple):
-            tck_kz_integral = np.array(tck_kz_integral, dtype=object)
-        print('saving for pimax =', pmi)
-        np.save(directory+'/kz_integral_NL_spl_pimax_'+str(pmi)+'.npy', tck_kz_integral)
+        print('saving pimax-weighted valued for rp =', pimax_rp)
+        with open(directory+'/kz_integral_NL_spl_Wpimaxrp_'+str(n_gaussians)+'D_'+str(pimax_rp)+'.pkl', 'wb') as f:
+            pickle.dump(tck_kz_integral, f)
     print('Finished')
     return None
     
