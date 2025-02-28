@@ -4,13 +4,23 @@ from alignment_functions.basic_alignment import *
 from visualization_functions.plotting import *
 
 def gauss_sum(x, *params):        # for multiple gaussians
+    '''
+    params: list of len 2*n_gaussians. [amp1, std1, amp2, std2, ...]
+    '''
     y = np.zeros_like(x)
     for i in range(0, len(params), 2):
-        ctr = 0#params[i]
         amp = params[i]
         std = params[i+1]
-        y += amp * np.exp( -((x - 0)/(std))**2)
+        y += amp * np.exp( -( x**2/( 2 * std**2) ))
     return y
+
+def fit_gaussians(rpar_bins, measured_weight, n_gaussians=1, amp_max=np.inf):
+    p0 = [1, 1]*n_gaussians # initial guess for parameters. amplitude, width
+    try:
+        popt, pcov = curve_fit(gauss_sum, rpar_bins, measured_weight, p0=p0, bounds=([-np.inf, 0]*n_gaussians, [amp_max, np.inf]*n_gaussians))
+    except RuntimeError:
+        popt = [np.nan]*len(p0)
+    return popt
 
 
 def bin_relE_results(all_proj_dists, all_pa_rels, all_los_dists=None, all_weights=None, R_bins=np.logspace(0, 2, 11), pimax = 30, pimax_weights=None):

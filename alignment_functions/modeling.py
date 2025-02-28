@@ -124,6 +124,8 @@ def precompute_kz_integral(pimax_values, PS_data = abacus_ps_nl, directory=str(k
         tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=1e-3)
         
         # save the spline
+        if isinstance(tck_kz_integral, tuple):
+            tck_kz_integral = np.array(tck_kz_integral, dtype=object)
         print('saving for pimax =', pmi)
         np.save(directory+'/kz_integral_NL_spl_pimax_'+str(pmi)+'.npy', tck_kz_integral)
     print('Finished')
@@ -330,7 +332,7 @@ def get_rel_e_model(R_bin_min, R_bin_max, pimax_values, wp_values, b_gal, z = 0.
     # computing the model prediction in each bin of projected separation
     model_estimates = []
     for i in range(len(R_bin_min)):
-        model_est = get_model_est(R_bin_min[i], R_bin_max[i], 100, b_gal=b_gal, tau=1)
+        model_est = get_model_est(R_bin_min[i], R_bin_max[i], pimax_values[i], b_gal=b_gal, tau=1)
         model_estimates.append(model_est)
     model_estimates = np.asarray(model_estimates)
     
