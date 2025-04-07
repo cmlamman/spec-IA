@@ -55,6 +55,11 @@ def D(z, norm_at_z0=False):
     else: 
         z_inf = 100000
         return (g(z) / g(z_inf)) / (1+z)
+    
+def get_relative_bias(z, wp, D_base, wp_base):
+    '''get relative bias of a galaxy sample at z with projected correlation function wp, 
+    compared to a sample with growth factor D_base and projected correlation function wp_base.'''
+    return (D_base / D(z)) * (wp/wp_base)**2s
        
 
 #####################################################################################################
@@ -162,9 +167,44 @@ def precompute_kz_integral(pimax_values, PS_data, directory, PS_min = 1e-4, PS_m
             value = scipy.integrate.romberg(kz_integrand, a=PS_min, b=PS_max, args=[K], rtol=1.48e-8, divmax=15)
             kz_integral_values.append(value) # integrate over kz
         tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=1e-3)
-        print('saving pimax-weighted valued for rp =', pimax_rp)
+        print('saving pimax-weighted values for rp =', pimax_rp)
         with open(directory+'/kz_integral_NL_spl_Wpimaxrp_'+str(n_gaussians)+'D_'+str(pimax_rp)+'.pkl', 'wb') as f:
             pickle.dump(tck_kz_integral, f)
+    print('Finished')
+    return None
+
+def precompute_kz_integral_1D_gauss_limber(pimax_values, PS_data, directory, gauss_std, PS_min = 1e-4, PS_max = 2e2, n_samples=100, warning_handling='once', pimax_rp=None, overwrite=True):
+    # assume that only the kz=0 contributions matter. Typically only true when r_p << r_par
+
+    '''
+    Precompute the integral of the kz integral and save a spline as a function of K (in log space)
+    
+    INPUT:
+    ------------------
+    pimax_values: array of shape (n,). Line-of-sight distance 
+    PS_data: dictonary or DataFrame of matter power spectrum values. Must contain columns 'k' and 'P'. Default is a non-linear matter power spectrum from AbacusSummit.
+    directory: string. Directory path to save the spline files.
+    PS_min, PS_max: floats. Range of k to use for the power spectrum [h/Mpc]
+    n_samples: int. Number of samples to use for the spline. For a better integration, this function will add a few more to better sample where sincx = 0
+    gauss_params: array of shape (2n,). Parameters for the gaussian fit. If pi_weighting = True, this is the parameters for the gaussian fit to the 2D correlation function.
+                  will use parameters as sigma1, width1, sigma2, width2, etc.
+    RETURNS:
+    ------------------
+    None. Saves the spline files in the directory.
+    '''
+    
+    if overwrite == False:
+        if os.path.exists(directory+'/kz_integral_NL_spl_Wpimaxrp_1D_limber_'+str(pimax_rp)+'.pkl'):
+            print('File exists. Skipping')
+            return None
+        
+    Ks_sample_values = np.logspace(np.log10(PS_min), np.log10(PS_max), n_samples)    
+
+    kz_integral_values = gauss_std * get_PS(Ks_sample_values)
+    tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=1e-3)
+    print('saving values for rp =', pimax_rp)
+    with open(directory+'/kz_integral_NL_spl_Wpimaxrp_1D_limber_'+str(pimax_rp)+'.pkl', 'wb') as f:
+        pickle.dump(tck_kz_integral, f)
     print('Finished')
     return None
     
