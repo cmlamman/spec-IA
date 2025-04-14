@@ -59,7 +59,7 @@ def D(z, norm_at_z0=False):
 def get_relative_bias(z, wp, D_base, wp_base):
     '''get relative bias of a galaxy sample at z with projected correlation function wp, 
     compared to a sample with growth factor D_base and projected correlation function wp_base.'''
-    return (D_base / D(z)) * (wp/wp_base)**2s
+    return (D_base / D(z)) * (wp/wp_base)**2
        
 
 #####################################################################################################
