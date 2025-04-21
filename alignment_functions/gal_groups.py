@@ -494,3 +494,78 @@ def get_group_2pt_projected_corr(catalog, random_paths, catalog2=None, tracer_ca
         corr_table.write(save_path, overwrite=True)
         
     return np.mean(corr_results, axis=0)
+
+
+
+######################
+# HIGH_LEVEL FUNCTION FOR SIMULATION DATA
+#######################
+
+def get_MIA_from3D(points_3D, save_directory, print_info=True, sim_label=0,
+                   periodic_boundary=True, transverse_max = 1, los_max=6, max_rp=100, n_batches = 10):
+    '''
+    A high-level function to calculate multiplet alignment for a set of points in 3D comoving space.
+    assumes periodic boundaries and units of Mpc/h
+    transverse_max and los_max are parameters used to identify pairs that compose multiplets
+    sim_label (optional): number to keep track of running multiple sims
+    '''
+    
+    if print_info:
+        print('Calculating MIA for %d points' % len(points_3D))
+        
+    if print_info:
+        print('Finding multiplets')
+    
+    
+    multiplets = find_groups_UnionFind(points_3D, max_n=1000, transverse_max=transverse_max, los_max=los_max) 
+    multiplet_table = make_group_table(points_3D, multiplets)
+    if print_info:
+        print('Found %d multiplets' % len(multiplet_table), 'averange number of members: %f' % np.mean(multiplet_table['n_group']))  
+    
+    # make an array with every comination of adding or subtracting the box size to each dimmension
+    extend_by = max_rp
+    new_orgins = np.array([[i, j, k] for i in [-1, 0, 1] for j in [-1, 0, 1] for k in [-1, 0, 1]]) * np.max(points_3D[:,0])  # assumes box is a cube with one corner at 0,0,0
+    extended_points = np.array([points_3D + new_orgins[i] for i in range(len(new_orgins))])
+    extended_points = np.concatenate(extended_points, axis=0)
+
+    # trim to points within some distance of origional box
+    i_keep = (extended_points[:,0] > np.min(points_3D[:,0])-extend_by) & (extended_points[:,0] < np.max(points_3D[:,0])+extend_by) 
+    i_keep &= (extended_points[:,1] > np.min(points_3D[:,1])-extend_by) & (extended_points[:,1] < np.max(points_3D[:,1])+extend_by)
+    i_keep &= (extended_points[:,2] > np.min(points_3D[:,2])-extend_by) & (extended_points[:,2] < np.max(points_3D[:,2])+extend_by)
+    periodic_tracer_points = extended_points[i_keep]
+    
+    ## default - add as argument later
+    R_bins = np.logspace(np.log10(5), np.log10(100), 16) #np.logspace(0, 2, 11)
+    R_bin_middles = (R_bins[1:] + R_bins[:-1])/2
+    pimax_values = 6 + (2/3)*R_bin_middles
+
+
+    # order group table randomly (but reproducibly)
+    random.seed(42)
+    indices = np.asarray(range(len(multiplet_table)))
+    random.shuffle(indices)
+    group_table3 = multiplet_table[indices]
+
+    # run in n_batches
+    i_end = int(len(multiplet_table)/n_batches)
+    i_start = 0
+    
+    for i in range(int(n_batches)):
+        # print progress every 12
+        if i % 24 == 0 and print_info:
+            print('working on batch', i, 'sim:', sim_label)
+        batch_save_path = save_directory + 'MIA_16bins_5_100_'+str(len(points_3D))+'_sim'+sim_label+'_'+str(n_batches)+'batches_'+str(i)+'.npy'
+        # check if file exists
+        if len(glob.glob(batch_save_path)) > 0:
+            #print('file exists, skipping')
+            continue
+        
+        group_batch = multiplet_table[i_start:i_end]
+        i_start = i_end
+        i_end += int(len(multiplet_table)/n_batches)
+
+        pa_rel_binned = calculate_rel_ang_cartesian_binAverage(ang_tracers = group_batch['center_loc'], ang_values = group_batch['orientation'], 
+                                                                    loc_tracers = periodic_tracer_points, loc_weights=[1]*len(periodic_tracer_points), E_ABS = np.asarray([1]*len(group_batch)),
+                                                                    R_bins=R_bins, pimax=pimax_values) 
+        # save
+        np.save(batch_save_path, pa_rel_binned)
