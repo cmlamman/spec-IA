@@ -95,7 +95,8 @@ def get_cosmo_points(data, cosmology=cosmo, truez=False):
     else:
         comoving_dist = cosmo.comoving_distance(data['Z']).to(u.Mpc)
     points = coordinates.spherical_to_cartesian(np.abs(comoving_dist), np.asarray(data['DEC'])*u.deg, np.asarray(data['RA'])*u.deg)     # in Mpc
-    return np.asarray(points).transpose() * cosmology.h                                                                                 # in Mpc/h
+    cp_points = np.asarray(points).transpose() * cosmology.h                                                                            # in Mpc/h
+    return np.float32(cp_points)
 
 
 def get_pair_coords(obs_pos1, obs_pos2, use_center_origin=True, cosmology=cosmo):

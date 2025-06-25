@@ -62,8 +62,9 @@ def find_components(line_iterator, max_size):
     # return list of integers
     return list(result.values())
 
-def find_groups_UnionFind(points, max_n=10, transverse_max = 0.5, los_max = 6, transverse_min=None):
-    
+def find_groups_UnionFind(points, max_n=10, transverse_max = 0.5, los_max = 6, transverse_min=None, poo=np.asarray([0, 0, 0])):
+    '''assumes LOS is along z-axis and observer at poo (default origin)'''
+    points -= poo  # shift points to observer at origin
     # find nearest neighbor for each galaxy
     tree = cKDTree(points)
     max_pair_sep = np.sqrt(transverse_max**2 + los_max**2)

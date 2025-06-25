@@ -37,9 +37,11 @@ kz_spline_paths = list(kz_spline_parent_paths.glob('*.npy')) # pre-computed valu
 
 #####################################################################################################
 # GENRAL COSMOLOGY FUNCTIONS
+# useful rescource: https://public.websites.umich.edu/~huterer/Papers/Huterer_growth_2023.pdf
 #####################################################################################################
 
 def g(z):
+    # linear growth suppression factor
     O_M = cosmo.Om(z)
     O_DE = 1 - O_M
     return (5/2) * O_M / (O_M**(4/7) - O_DE + (1 + 0.5*O_M) * (1 + (O_DE/70)))
