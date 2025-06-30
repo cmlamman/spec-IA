@@ -236,11 +236,9 @@ def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, abs_e=None
     nc = neighbor_coords**2
     nc = np.sum(nc, axis=1)
     dist_to_orgin_loc = np.sqrt(nc)
-    del nc
     cc = center_coords**2
     cc = np.sum(cc, axis=1)
     dist_to_orgin_ang = np.sqrt(cc)
-    del cc
     
     if print_progress: print('calculating separations')
     dist_to_orgin_loc -= dist_to_orgin_ang
@@ -440,14 +438,20 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
     ii = tree.query_ball_point(ang_tracers, r=np.sqrt(R_bins[-1]**2 + np.max(pimax)**2))
     if print_progress: print('found neighbors')
     # add placeholder row to loc_tracers
-    loc_tracers = np.vstack((loc_tracers, np.full(len(loc_tracers[0]), np.inf)))
+    
+    loc_tracers = np.vstack((loc_tracers, np.full(len(loc_tracers[0]), np.inf)))   # adding placeholder row for when neighbor not found
     loc_weights = np.append(loc_weights, 0)
     
     center_coords = np.repeat(ang_tracers, [len(i) for i in ii], axis=0)
     center_angles = np.repeat(ang_values, [len(i) for i in ii])
     center_E = np.repeat(E_ABS, [len(i) for i in ii])
-    neighbor_coords = loc_tracers[np.concatenate(ii).astype(int)]
-    neighbor_weights = loc_weights[np.concatenate(ii).astype(int)]
+    
+    concat_indices = np.concatenate(ii).astype(int)
+    neighbor_weights = loc_weights[concat_indices]
+    loc_tracers = loc_tracers.T                         # it takes less time to index a 3xN array than a Nx3 array!
+    neighbor_coords = loc_tracers[:, concat_indices]
+    neighbor_coords = neighbor_coords.T
+    loc_tracers = loc_tracers.T
     
     if print_progress: print('calculating distances')
     
@@ -504,9 +508,7 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
             to_sample = np.where(i_bin_keep)[0]
             i_random_remove = np.random.choice(to_sample, n_to_remove, replace=False)
             i_bin_keep[i_random_remove] = False
-            
-            del i_random_remove, to_sample, n_to_remove
-            
+                        
         if print_progress: print('indexing bin arrays')
         c_bin = center_coords[i_bin_keep]
         n_bin = neighbor_coords[i_bin_keep]
@@ -530,10 +532,6 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
         weight_sum = np.nansum(weight_to_use)
         weighted_av = weighted_sum / weight_sum
         rel_angles.append(weighted_av)
-    
-    # remove all uneccesary variables from memory
-    del center_coords, center_angles, neighbor_coords, neighbor_weights, dist_to_orgin_loc, dist_to_orgin_ang, los_sep, proj_dist
-    del i_keep, R_bin_i, c_bin, n_bin, ca_bin, weight_to_use, position_angle, pa_rel, weighted_sum, weight_sum, weighted_av
     
     return rel_angles
 
