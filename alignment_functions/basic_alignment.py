@@ -157,7 +157,7 @@ def e_to_esq(e1, e2):
     mult_factor =  (b_a+1)**2 / (b_a**2 + 1)
     return e1 * mult_factor, e2 * mult_factor 
 
-def get_rel_es(catalog, indices, data_weights=None, weights=None, rcolor='rw1', return_sep=False, j=0):
+def get_rel_es(catalog, indices, data_weights=None, weights=None, rcolor='rw1', return_sep=False):
     '''
     input: 
         array of indices for n centers and maximum m neighbors each- shape(n,m)
@@ -192,10 +192,6 @@ def get_rel_es(catalog, indices, data_weights=None, weights=None, rcolor='rw1', 
     pa_rel = theta_neighbor - pa.value  # in rad
     e1_re, e2_rel = e_complex(a, b, pa_rel)
     
-    # TEMP - TO GET Z DISTRIBUTION
-    ##z_binned = plt.hist(centers_m['Z'], bins=np.linspace(0, 1.4, 100))
-    ##np.savetxt('/pscratch/sd/c/clamman/ia_measurements/LRG_ELG_cut_z/'+str(j)+'.csv', z_binned[0], delimiter=',')
-    
     if (weights is None) and (data_weights is None):
         return e1_re, e2_rel, None
     
@@ -211,7 +207,8 @@ def get_rel_es(catalog, indices, data_weights=None, weights=None, rcolor='rw1', 
 
 def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, abs_e=None, loc_weights=None, pimax = 20, max_proj_sep = 30, max_neighbors=100, 
                                 return_los=False, print_progress=False, tracer_behind=False, keep_as_angle=True):
-    '''ang and loc tracers are 3d points. ang_values are orientation angles of ang_tracers 
+    '''
+    ang and loc tracers are 3d points. ang_values are orientation angles of ang_tracers 
     - pimax (float, optional): Maximum line-of-sight separation for pairs of galaxies in Mpc/h. Default is 30.
     - abs_e (array, optional): can supply absolute value of ellipticity to get relative full ellipticity. If supplied, will automatically return (abs_e)*cos(2*angle)
     - keep_as_angle : if True, returns angle only. If False, returns the relevant IA signal (cos(2*angle))
