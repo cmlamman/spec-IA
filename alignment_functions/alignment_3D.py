@@ -1,6 +1,7 @@
 import numpy as np
 from astropy.table import Table, vstack
 from astropy import units as u
+from astropy.io import fits
 from alignment_functions.basic_alignment import *
 from alignment_functions.gal_multiplets import *
 
@@ -45,17 +46,16 @@ def get_angle_angle_correlation_cartesian(ang_locs, ang_values, weights=None, pr
     if print_progress: print('finding neighbors')
     ii = tree.query_ball_point(ang_locs, r=np.sqrt(max_rp**2 + max_rpar**2))
     if print_progress: print('found neighbors')
-
-    # add placeholder row to ang_locs
-    ang_locs = np.vstack((ang_locs, np.full(len(ang_locs[0]), np.inf)))
-    if weights is not None:
-        weights = np.append(weights, 0)
         
     indices0 = [len(i) for i in ii]   # for now I will not remove the double inclusion of pairs since I think that whether a point is in front of or behind another might matter for parity(??) regardless, it shouldn't impact the averages.- add back in later?
     indices1 = np.concatenate(ii)
 
     coords0 = np.repeat(ang_locs, indices0, axis=0)
     angles0 = np.repeat(ang_values, indices0)
+    # add placeholder row to ang_locs
+    ang_locs = np.vstack((ang_locs, np.full(len(ang_locs[0]), np.inf)))
+    if weights is not None:
+        weights = np.append(weights, 0)
     coords1 = ang_locs[indices1]
     angles1 = ang_values[indices1]
     
@@ -91,12 +91,18 @@ def get_angle_angle_correlation_cartesian(ang_locs, ang_values, weights=None, pr
     pa_rel0 = angles0 - pa0
     pa_rel1 = angles1 - pa1
     
-    if estimator == 'x+':
+    if estimator == 'x+' or estimator == '+x':
         rel_angs = np.sin(2*pa_rel0)*np.cos(2*pa_rel1)
-        if weights is not None:
-            rel_angs *= weights0 * weights1
+    elif estimator == '++':
+        rel_angs = np.cos(2*pa_rel0)*np.cos(2*pa_rel1)
+    elif estimator == 'g+' or estimator == '+g':
+        rel_angs = np.cos(2*pa_rel0)
+    elif estimator == 'gg':
+        rel_angs = np.ones_like(pa_rel0)  # just counts
     else:
-        raise ValueError('estimator not recognized')
+        raise ValueError('Estimator not recognized. Allowed: x+, ++, g+, gg')
+    if weights is not None:
+            rel_angs *= weights0 * weights1
     
     s_perp = proj_dist[pairs_to_keep]
     s_par  = los_sep[pairs_to_keep]
@@ -106,9 +112,9 @@ def get_angle_angle_correlation_cartesian(ang_locs, ang_values, weights=None, pr
 
 
 
-def get_3D_MIA_from3D(points_3D, save_directory, 
+def get_3D_MIA_from3D_autocorr(points_3D, save_directory, 
                       s_bins = np.logspace(np.log10(5), np.log10(100), 16), 
-                      mu_bins = np.linspace(-1, 1, 17),
+                      mu_bins = np.cos(np.linspace(np.pi, 0, 17)),
                       transverse_max = 1, los_max=1,
                       print_info=True, sim_label='example_3D',
                       periodic_boundary=False, n_batches = 10, save_intermediate=False, estimator='x+'):
@@ -116,7 +122,7 @@ def get_3D_MIA_from3D(points_3D, save_directory,
     A high-level function to calculate 3D multiplet alignment for a set of points in 3D comoving space.
     Input points and parameters can be in any units as long as they are consistent.
     -----------
-    points_3D: x, y, z positions of points. 
+    points_3D: array of shape Nx3 with the 3D comoving positions of points
     s_bins: bin edges of the separation for the final measurement
     mu_bins: bin edges of the cosine of the angle between the separation vector and the line of sight
     transverse_max and los_max: maximum transverse and line-of-sight separations to consider when finding multiplet members
@@ -176,7 +182,7 @@ def get_3D_MIA_from3D(points_3D, save_directory,
         # print progress every 12
         if i % 24 == 0 and print_info:
             print('working on batch', i, 'sim:', sim_label)
-        batch_save_path = save_directory + '/MIA_sim'+sim_label+'_'+bin_string+'_'+str(n_batches)+'_batches_'+str(i)+'.npy'
+        batch_save_path = save_directory + '/MIA_sim'+estimator+'_'+sim_label+'_'+bin_string+'_'+str(n_batches)+'_batches_'+str(i)+'.npy'
         # check if file exists
         if len(glob.glob(batch_save_path)) > 0:
             pa_rel_binned = np.load(batch_save_path)
@@ -189,9 +195,15 @@ def get_3D_MIA_from3D(points_3D, save_directory,
 
         pa_rel_unbinned, separations_unbinned = get_angle_angle_correlation_cartesian(group_batch['center_loc'], group_batch['orientation'], print_progress=print_info, max_rpar=np.max(s_bins), max_rp=np.max(s_bins), estimator=estimator)
         
-        # go from separations in r_par and r_perp to s and mu
-        s_unbinned = np.sqrt(separations_unbinned[:,0]**2 + separations_unbinned[:,1]**2)
-        mu_unbinned = separations_unbinned[:,1] / s_unbinned
+        sep = np.asarray(separations_unbinned)
+        # expect shape (2, N)
+        rp = sep[0, :]
+        rpar = sep[1, :]
+
+        s_unbinned = np.sqrt(rp**2 + rpar**2)
+        mu_unbinned = np.zeros_like(s_unbinned, dtype=float)
+        nz = s_unbinned > 0
+        mu_unbinned[nz] = rpar[nz] / s_unbinned[nz]
         
         # bin the results
         pa_rel_binned, _, _ = np.histogram2d(s_unbinned, mu_unbinned, bins=[s_bins, mu_bins], weights=pa_rel_unbinned)
@@ -207,21 +219,16 @@ def get_3D_MIA_from3D(points_3D, save_directory,
     relAng = np.nanmean(pa_rel_binned_all, axis=0)
     relAng_e = np.nanstd(pa_rel_binned_all, axis=0) / np.sqrt(len(pa_rel_binned_all))
     
-    # save these 2D results in a table
-    results = Table()
-    #### STOPPED WORKING HERE. Need to save the 2D results, finish modifying this function, and test in parity_exploring.ipynb
+    # save these 2D results in a fits file
+    save_path = save_directory + '/MIA_sim_'+estimator+'_'+sim_label+'_'+str(n_batches)+'_batches_all.fits'
     
+    hdu_rel = fits.PrimaryHDU(relAng.astype(np.float32))
+    hdu_err = fits.ImageHDU(relAng_e.astype(np.float32), name=estimator+'_ERR')
+    hdu_sbins = fits.ImageHDU(np.asarray(s_bins, dtype=np.float32), name='S_BINS')
+    hdu_mubins = fits.ImageHDU(np.asarray(mu_bins, dtype=np.float32), name='MU_BINS')
+    hdul = fits.HDUList([hdu_rel, hdu_err, hdu_sbins, hdu_mubins])
     
-    
-    if isinstance(pimax_values, (int, float)):
-        results['pimax'] = [pimax_values] * len(R_bins[:-1])
-    else:
-        results['pimax'] = pimax_values
+    hdul.writeto(save_path, overwrite=True)
+    print('Results saved to ', save_path) 
 
-    save_path = save_directory + '/MIA_16bins_'+str(round(np.min(R_bins)))+'-'+str(round(np.max(R_bins)))+'_'+str(n_batches)+'batches_'+str(sim_label)+'.fits'
-    if save_path is not None:
-        results.write(save_path, overwrite=True)
-        print('Results saved to ', save_path) 
-        
-    return results
-    
+    return relAng, relAng_e
