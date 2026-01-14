@@ -505,7 +505,7 @@ def get_group_2pt_projected_corr(catalog, random_paths, catalog2=None, tracer_ca
 #######################
 
 def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), np.log10(100), 16), print_info=True, sim_label='example',
-                   periodic_boundary=False, transverse_max = 1, los_max=6, max_rp=100, n_batches = 10, save_intermediate=False):
+                   periodic_boundary=False, transverse_max = 1, los_max=6, max_rp=100, n_batches = 10, save_intermediate=False, save_info=False):
     '''
     A high-level function to calculate projected multiplet alignment for a set of points in 3D comoving space.
     Input points and parameters can be in any units as long as they are consistent.
@@ -532,6 +532,17 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
         unique, counts = np.unique(multiplet_table['n_group'], return_counts=True)
         print('size:', [u for u in np.asarray(unique)])
         print('counts:', [c for c in np.asarray(counts)])
+    
+    if save_info:
+        # save a short text file with multiplet info
+        multiplet_info_path = save_directory + '/multiplet_info_'+sim_label+'.txt'
+        with open(multiplet_info_path, 'w') as f:
+            f.write('Number of multiplets: %d\n' % len(multiplet_table))
+            f.write('Average number of members: %f\n' % np.mean(multiplet_table['n_group']))
+            unique, counts = np.unique(multiplet_table['n_group'], return_counts=True)
+            f.write('Multiplet size counts:\n')
+            for u, c in zip(unique, counts):
+                f.write('Size: %d, Count: %d\n' % (u, c))
 
     if periodic_boundary:
         # make an array with every comination of adding or subtracting the box size to each dimmension

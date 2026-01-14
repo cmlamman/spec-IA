@@ -27,61 +27,73 @@ def get_angle_angle_correlation_fromSky(catalog, indices, use_weights=False, ret
     return None
 
 
-def get_angle_angle_correlation_cartesian(ang_locs, ang_values, weights=None, print_progress=False, max_rpar=100, max_rp=100, estimator='x+'):
+def get_angle_angle_correlation_cartesian(ang_locs_0, ang_values_0, ang_locs_1=None, ang_values_1=None, weights_0=None, weights_1=None, print_progress=False, max_rpar=100, max_rp=100, estimator='x+'):
     '''
     Assumes angles are in plane perpendicular to LOS (vector from orgin to object position).
     input: 
-        ang_locs (array of shape Nx3): objects' 3D positions
-        ang_values (array of shape N): objects' orientation angles (in radians)
-        weights (bool or array of shape N): can supply absolute value of ellipticity to use relative full ellipticity.
+        ang_locs_0 (array of shape Nx3): objects' 3D positions
+        ang_values_0 (array of shape N): objects' orientation angles (in radians)
+        ang_locs_1 and ang_values_1 (optional): if provided, will compute cross-correlation between the two sets of points. Useful if breaking up data but want to preserve correlation across boundaries, i.e. _0 is a subset of the full catalog _1.
+        weights_0 and weights_1 (bool or array of shape N): can supply absolute value of ellipticity to use relative full ellipticity.
     output:
         rel_angs (array of shape P): angle-angle correlation, in array of shape P where P is the number of unique pairs.
         rel_pos (array of shape 2xP): 2D separation vector between pairs in s_perp, s_par. s_perp is the distance projected on the same plane as the provided angles and s_par is the line-of-sight separation.
     '''
     
+    if ang_locs_1 is None:
+        ang_locs_1 = ang_locs_0.copy()
+        ang_values_1 = ang_values_0.copy()
+        weights_1 = weights_0.copy() if weights_0 is not None else None
+    
     if print_progress: print('making tree')
     # make tree
-    tree = cKDTree(ang_locs)
+    tree = cKDTree(ang_locs_1)  # 'full' catalog
     # find neighbors
     if print_progress: print('finding neighbors')
-    ii = tree.query_ball_point(ang_locs, r=np.sqrt(max_rp**2 + max_rpar**2))
+    ii = tree.query_ball_point(ang_locs_0, r=np.sqrt(max_rp**2 + max_rpar**2))  # query with main objects
     if print_progress: print('found neighbors')
         
-    indices0 = [len(i) for i in ii]   # for now I will not remove the double inclusion of pairs since I think that whether a point is in front of or behind another might matter for parity(??) regardless, it shouldn't impact the averages.- add back in later?
+    indices0 = [len(i) for i in ii]   # for now I will not remove the double inclusion of pairs since I think that whether a point is in front of or behind another might matter for parity and cross-boundary pairs
     indices1 = np.concatenate(ii)
 
-    coords0 = np.repeat(ang_locs, indices0, axis=0)
-    angles0 = np.repeat(ang_values, indices0)
+    coords0 = np.repeat(ang_locs_0, indices0, axis=0)
+    angles0 = np.repeat(ang_values_0, indices0)
+    if weights_0 is not None:
+        weights0 = np.repeat(weights_0, indices0)
     # add placeholder row to ang_locs
-    ang_locs = np.vstack((ang_locs, np.full(len(ang_locs[0]), np.inf)))
-    if weights is not None:
-        weights = np.append(weights, 0)
-    coords1 = ang_locs[indices1]
-    angles1 = ang_values[indices1]
+    ang_locs_1 = np.vstack((ang_locs_1, np.full(len(ang_locs_1[0]), np.inf)))
+    if weights_1 is not None:
+        weights_1 = np.append(weights_1, 0)
+        weights1 = weights_1[indices1]
+    coords1 = ang_locs_1[indices1]
+    angles1 = ang_values_1[indices1]
     
     # computing los separation (broken up to save memory
     # L
     nc = coords0**2
     nc = np.sum(nc, axis=1)
-    dist_to_orgin_loc = np.sqrt(nc)
+    dist_to_orgin_0 = np.sqrt(nc)
     cc = coords1**2
     cc = np.sum(cc, axis=1)
-    dist_to_orgin_ang = np.sqrt(cc)
+    dist_to_orgin_1 = np.sqrt(cc)
     
     if print_progress: print('calculating separations')
-    dist_to_orgin_loc -= dist_to_orgin_ang
-    los_sep = dist_to_orgin_loc # previously was abs() - add back in later?
-    proj_dist = np.abs(get_proj_dist(coords0, coords1))
-    proj_dist = proj_dist # previously was abs() - add back in later?
+    los_sep = dist_to_orgin_0 - dist_to_orgin_1 # previously was abs() - add back in later?
+    proj_dist = np.abs(get_proj_dist(coords0, coords1)) # previously was abs() - add back in later?
 
     pairs_to_keep = (los_sep < max_rpar) & (proj_dist < max_rp)
     coords0 = coords0[pairs_to_keep]
     coords1 = coords1[pairs_to_keep]
     angles0 = angles0[pairs_to_keep]
     angles1 = angles1[pairs_to_keep]
-    if weights is not None:
-        weights0 = weights0[pairs_to_keep]
-        weights1 = weights1[pairs_to_keep]
+    if weights_0 is not None:
+        weights_0 = weights_0[pairs_to_keep]
+    else:
+        weights0 = None
+    if weights_1 is not None:
+        weights_1 = weights_1[pairs_to_keep]
+    else:
+        weights1 = None
         
         
     # calculating position angles
@@ -101,14 +113,16 @@ def get_angle_angle_correlation_cartesian(ang_locs, ang_values, weights=None, pr
         rel_angs = np.ones_like(pa_rel0)  # just counts
     else:
         raise ValueError('Estimator not recognized. Allowed: x+, ++, g+, gg')
-    if weights is not None:
-            rel_angs *= weights0 * weights1
+    #if weights_0 is not None:
+    #    rel_angs *= weights0
+    #if weights_1 is not None:
+    #    rel_angs *= weights1
     
     s_perp = proj_dist[pairs_to_keep]
     s_par  = los_sep[pairs_to_keep]
     rel_pos = np.vstack((s_perp, s_par))
-
-    return rel_angs, rel_pos
+    
+    return rel_angs, rel_pos, weights0, weights1
 
 
 
