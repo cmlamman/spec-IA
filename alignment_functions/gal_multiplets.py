@@ -228,7 +228,7 @@ def make_group_catalog(data_catalog, comoving_points=None, transverse_max = 1, l
 
 def get_multiplet_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins=np.logspace(0, 2, 10), pimax=30, cosmology=cosmo, print_progress=False, 
                         n_sky_regions=100, save_path=None, pair_max_los=6, pair_max_transverse=1, pair_min_transverse=None, early_binning=False, keep_intermediate=False,
-                        truez=False, intermediate_save_paths=None):
+                        truez=False, intermediate_save_paths=None, return_pair_counts=False):
     '''
     Calculate the alignment of galaxy multiplets (sometimes called 'groups' here) within the given catalog, relative to tracers from the same catalog or other, if provided. 
     Saves results to save_path, if provided.
@@ -285,7 +285,7 @@ def get_multiplet_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins
         
         rel_angle_regions_binned(group_catalog, loc_tracers = comoving_points_tracers,  tracer_weights = catalog_for_tracers['WEIGHT'],
                                                     R_bins=R_bins, n_regions=n_sky_regions, pimax=pimax, keep_as_regions=False, print_progress=print_progress, 
-                                                    intermediate_save_paths=intermediate_save_paths)
+                                                    intermediate_save_paths=intermediate_save_paths, return_pair_counts=return_pair_counts)
         # reading in the calculated results
         if print_progress:
             print('Reading in region results')
@@ -293,10 +293,17 @@ def get_multiplet_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins
         all_pa_rels = np.asarray([np.load(region_path) for region_path in region_paths])
         relAng = np.nanmean(all_pa_rels, axis=0)
         relAng_e = np.nanstd(all_pa_rels, axis=0) / np.sqrt(len(all_pa_rels))
+        if return_pair_counts:
+            pair_count_paths = glob.glob(intermediate_save_paths + '*_paircounts.npy')
+            all_pair_counts = np.asarray([np.load(region_path) for region_path in pair_count_paths])
+            n_pairs = np.nansum(all_pair_counts, axis=0)
         # remove intermediate files
         if not keep_intermediate:
             for region_path in region_paths:
                 os.remove(region_path)
+            if return_pair_counts:
+                for region_path in pair_count_paths:
+                    os.remove(region_path)
         
     else:
         max_proj_sep = np.max(R_bins)
@@ -313,7 +320,8 @@ def get_multiplet_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins
                                                             n_regions=n_sky_regions, pimax=np.max(pimax), max_proj_sep=max_proj_sep, return_los=True)
             use_sliding_pimax = True
         
-        sep_bins, relAng, relAng_e = bin_region_results(group_seps, group_paRel, all_weights = weights, R_bins=R_bins, use_sliding_pimax=use_sliding_pimax, los_sep=group_los)
+        sep_bins, relAng, relAng_e, pair_counts_binned = bin_region_results(group_seps, group_paRel, all_weights = weights, R_bins=R_bins, use_sliding_pimax=use_sliding_pimax, 
+                                                                            los_sep=group_los, return_pair_counts=return_pair_counts)
     
     results = Table()
     
@@ -321,6 +329,8 @@ def get_multiplet_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins
     results['R_bin_max'] = R_bins[1:]
     results['relAng_plot'] = relAng
     results['relAng_plot_e'] = relAng_e
+    if return_pair_counts:
+        results['pair_counts'] = pair_counts_binned
     if isinstance(pimax, (int, float)):
         results['pimax'] = [pimax] * len(R_bins[:-1])
     else:
@@ -334,7 +344,8 @@ def get_multiplet_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins
 
 
 def get_multiplet_alignment_randoms(catalog_for_groups, random_catalog_paths, R_bins, pimax=30, cosmology=cosmo, print_progress=False, 
-                        n_sky_regions=100, save_path=None, pair_max_los=6, pair_max_transverse=1, pair_min_transverse=None, early_binning=False, keep_intermediate=False, intermediate_save_paths=None):
+                        n_sky_regions=100, save_path=None, pair_max_los=6, pair_max_transverse=1, pair_min_transverse=None, early_binning=False, 
+                        keep_intermediate=False, intermediate_save_paths=None, return_pair_counts=False):
     '''
     Simillar to get_multiplet_alignment, but calculates the alignment of galaxy multiplets within the given catalog relative to multiple random catalogs.
     random_catalog_paths: list of paths to random catalogs. 
@@ -346,6 +357,7 @@ def get_multiplet_alignment_randoms(catalog_for_groups, random_catalog_paths, R_
     group_catalog = make_group_catalog(catalog_for_groups, cosmology=cosmology, los_max=pair_max_los, transverse_max=pair_max_transverse, transverse_min=pair_min_transverse)
 
     rand_signal = []
+    rand_pair_counts = []
     # check if random_catalog_paths is an integer
     if isinstance(random_catalog_paths, int):
         n_random_catalogs = random_catalog_paths
@@ -385,7 +397,7 @@ def get_multiplet_alignment_randoms(catalog_for_groups, random_catalog_paths, R_
             
             rel_angle_regions_binned(group_catalog, loc_tracers = comoving_points_tracers,  tracer_weights = random_catalog['WEIGHT'],
                                                         R_bins=R_bins, n_regions=n_sky_regions, pimax=pimax, keep_as_regions=False, print_progress=False, 
-                                                        intermediate_save_paths=intermediate_save_paths)
+                                                        intermediate_save_paths=intermediate_save_paths, return_pair_counts=return_pair_counts)
             # reading in the calculated results
             if print_progress:
                 print('Reading in region results')
@@ -394,10 +406,17 @@ def get_multiplet_alignment_randoms(catalog_for_groups, random_catalog_paths, R_
             relAng = np.nanmean(all_pa_rels, axis=0)
             #relAng_e = np.nanstd(all_pa_rels, axis=0) / np.sqrt(len(all_pa_rels))
             # remove intermediate files
+            if return_pair_counts:
+                pair_count_paths = glob.glob(intermediate_save_paths + '*_paircounts.npy')
+                all_pair_counts = np.asarray([np.load(region_path) for region_path in pair_count_paths])
+                n_pairs = np.nansum(all_pair_counts, axis=0)
+            # remove intermediate files
             if not keep_intermediate:
                 for region_path in region_paths:
                     os.remove(region_path)
-            rand_signal.append(relAng)
+                if return_pair_counts:
+                    for region_path in pair_count_paths:
+                        os.remove(region_path)
             
         else:
             max_proj_sep = np.max(R_bins)
@@ -414,8 +433,11 @@ def get_multiplet_alignment_randoms(catalog_for_groups, random_catalog_paths, R_
                                                                 n_regions=n_sky_regions, pimax=np.max(pimax), max_proj_sep=max_proj_sep, return_los=True)
                 use_sliding_pimax = True
             
-            sep_bins, relAng, relAng_e = bin_region_results(group_seps, group_paRel, all_weights = weights, R_bins=R_bins, use_sliding_pimax=use_sliding_pimax, los_sep=group_los)
+            sep_bins, relAng, relAng_e, pair_counts_binned = bin_region_results(group_seps, group_paRel, all_weights = weights, R_bins=R_bins, use_sliding_pimax=use_sliding_pimax, 
+                                                                                    los_sep=group_los, return_pair_counts=return_pair_counts)
             rand_signal.append(relAng)
+            if return_pair_counts:
+                rand_pair_counts.append(pair_counts_binned)
 
 
     # saving randoms
@@ -429,7 +451,8 @@ def get_multiplet_alignment_randoms(catalog_for_groups, random_catalog_paths, R_
         results['pimax'] = [pimax] * len(R_bins[:-1])
     else:
         results['pimax'] = pimax
-    
+    if return_pair_counts:
+        results['pair_counts'] = np.sum(np.asarray(rand_pair_counts), axis=0)
     results.write(save_path, overwrite=True)
     print('Results saved to ', save_path) 
     
@@ -505,7 +528,8 @@ def get_group_2pt_projected_corr(catalog, random_paths, catalog2=None, tracer_ca
 #######################
 
 def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), np.log10(100), 16), print_info=True, sim_label='example',
-                   periodic_boundary=False, transverse_max = 1, los_max=6, max_rp=100, n_batches = 10, save_intermediate=False, save_info=False):
+                   periodic_boundary=False, transverse_max = 1, los_max=6, max_rp=100, n_batches = 10, save_intermediate=False, save_info=False,
+                   return_pair_counts=False):
     '''
     A high-level function to calculate projected multiplet alignment for a set of points in 3D comoving space.
     Input points and parameters can be in any units as long as they are consistent.
@@ -575,16 +599,26 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
     i_end = int(len(multiplet_table)/n_batches)
     i_start = 0
     
+    results_base_path = save_directory + '/MIA_'+str(len(R_bins))+'bins_'+str(np.min(R_bins))+'_'+str(np.max(R_bins))+'_counts'+str(len(points_3D))+'_sim'+sim_label+'_'+str(n_batches)+'batches_'
+    print('Results base path:', results_base_path)
     pa_rel_binned_all = []
+    pair_counts_all = []
     for i in range(int(n_batches)):
-        # print progress every 12
-        if i % 24 == 0 and print_info:
+        # print progress every 50
+        if i % 50 == 0 and print_info:
             print('working on batch', i, 'sim:', sim_label)
-        batch_save_path = save_directory + '/MIA_16bins_5_100_'+str(len(points_3D))+'_sim'+sim_label+'_'+str(n_batches)+'batches_'+str(i)+'.npy'
+        batch_save_path = results_base_path + str(i)+'.npy'
+        
+        if return_pair_counts:
+            pair_counts_save_path = batch_save_path.replace('.npy', '_paircounts.npy')
+                
         # check if file exists
         if len(glob.glob(batch_save_path)) > 0:
             pa_rel_binned = np.load(batch_save_path)
             pa_rel_binned_all.append(pa_rel_binned)
+            if return_pair_counts:
+                pair_counts = np.load(pair_counts_save_path)
+                pair_counts_all.append(pair_counts)
             continue
         
         group_batch = multiplet_table[i_start:i_end]
@@ -593,7 +627,13 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
 
         pa_rel_binned = calculate_rel_ang_cartesian_binAverage(ang_tracers = group_batch['center_loc'], ang_values = group_batch['orientation'], 
                                                                     loc_tracers = tracer_points, loc_weights=[1]*len(tracer_points), E_ABS = np.asarray([1]*len(group_batch)),
-                                                                    R_bins=R_bins, pimax=pimax_values) 
+                                                                    R_bins=R_bins, pimax=pimax_values, return_pair_counts=return_pair_counts) 
+        if return_pair_counts:
+            pa_rel_binned, pair_counts = pa_rel_binned
+            pair_counts_all.append(pair_counts)
+            if save_intermediate:
+                np.save(pair_counts_save_path, pair_counts)
+            
         pa_rel_binned_all.append(pa_rel_binned)
         if save_intermediate:
             np.save(batch_save_path, pa_rel_binned)
@@ -601,6 +641,9 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
     pa_rel_binned_all = np.asarray(pa_rel_binned_all)
     relAng = np.nanmean(pa_rel_binned_all, axis=0)
     relAng_e = np.nanstd(pa_rel_binned_all, axis=0) / np.sqrt(len(pa_rel_binned_all))
+    if return_pair_counts:
+        pair_counts_all = np.asarray(pair_counts_all)
+        pair_counts_binned = np.nansum(pair_counts_all, axis=0)
     
     results = Table()
     
@@ -612,8 +655,11 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
         results['pimax'] = [pimax_values] * len(R_bins[:-1])
     else:
         results['pimax'] = pimax_values
+        
+    if return_pair_counts:
+        results['pair_counts'] = pair_counts_binned
 
-    save_path = save_directory + '/MIA_16bins_'+str(round(np.min(R_bins)))+'-'+str(round(np.max(R_bins)))+'_'+str(n_batches)+'batches_'+str(sim_label)+'.fits'
+    save_path = results_base_path+'.fits'
     if save_path is not None:
         results.write(save_path, overwrite=True)
         print('Results saved to ', save_path) 

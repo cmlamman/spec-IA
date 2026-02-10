@@ -10,7 +10,7 @@ def remove_astropyu(values_list, unit=u.Mpc):
 def get_bin_centers(bin_arr):
     return (bin_arr[1:] + bin_arr[:-1])/2
 
-def bin_sum_not_scipy(x_values, y_values, x_bins, statistic='sum', err=False, weights=None):
+def bin_sum_not_scipy(x_values, y_values, x_bins, statistic='sum', err=False, weights=None, return_counts=False):
     '''
     alternative to scipy, which sometimes has issues handling binnind with very non-uniform footprints
     x_bins = bin edges
@@ -20,29 +20,47 @@ def bin_sum_not_scipy(x_values, y_values, x_bins, statistic='sum', err=False, we
     if statistic=='sum':
         y_sums = []
         y_errs = []
+        y_counts = []
         for ind in range(len(x_bins)-1):
             y_bin = y_values[(inds==(ind+1))]
             y_sums.append(np.nansum(y_bin))#; y_std.append(np.std(y_bin))
             y_errs.append(np.nanstd(y_bin) / np.sqrt(len(y_bin)))
+            if return_counts==True:
+                y_counts.append(len(y_bin))
         if err==True:
-            return np.asarray(remove_astropyu(y_sums)), np.asarray(remove_astropyu(y_errs))
-        else:
-            return np.asarray(remove_astropyu(y_sums))#, np.asarray(y_std)
+            if return_counts==True:
+                return np.asarray(remove_astropyu(y_sums)), np.asarray(remove_astropyu(y_errs)), np.asarray(y_counts)
+            else:
+                return np.asarray(remove_astropyu(y_sums)), np.asarray(remove_astropyu(y_errs))
+        elif err==False:
+            if return_counts==True:
+                return np.asarray(remove_astropyu(y_sums)), np.asarray(y_counts)
+            else:
+                return np.asarray(remove_astropyu(y_sums))#, np.asarray(y_std)
     
     if statistic=='mean':
         y_sums = []
         y_errs = []
+        y_counts = []
         for ind in range(len(x_bins)-1):
             y_bin = y_values[(inds==(ind+1))]
             y_sums.append(np.nanmean(y_bin))#; y_std.append(np.std(y_bin))
             y_errs.append(np.nanstd(y_bin) / np.sqrt(len(y_bin)))
+            if return_counts==True:
+                y_counts.append(len(y_bin))
         if err==True:
-            return np.asarray(remove_astropyu(y_sums)), np.asarray(remove_astropyu(y_errs))
-        else:
-            return np.asarray(remove_astropyu(y_sums))
+            if return_counts==True:
+                return np.asarray(remove_astropyu(y_sums)), np.asarray(remove_astropyu(y_errs)), np.asarray(y_counts)
+            else:
+                return np.asarray(remove_astropyu(y_sums)), np.asarray(remove_astropyu(y_errs))
+        elif err==False:
+            if return_counts==True:
+                return np.asarray(remove_astropyu(y_sums)), np.asarray(y_counts)
+            else:
+                return np.asarray(remove_astropyu(y_sums))#, np.asarray(y_std)
         
         
-def bin_results(seps, reles, rp_bins, weights=None): 
+def bin_results(seps, reles, rp_bins, weights=None, return_counts=False): 
     '''sep_max really does nothing'''
     
     if(weights is None):
@@ -55,11 +73,14 @@ def bin_results(seps, reles, rp_bins, weights=None):
     
     rp_bin_centers = (rp_bins[1:]+rp_bins[:-1])/2   # just using centers of bins here. but could change to do mean rp value in each bin
         
-    msum = bin_sum_not_scipy(seps, reles*weights, x_bins=rp_bins, statistic='sum')
+    msum = bin_sum_not_scipy(seps, reles*weights, x_bins=rp_bins, statistic='sum', return_counts=return_counts)
+    pair_counts = None
+    if return_counts==True:
+        msum, pair_counts = msum
     wsum = bin_sum_not_scipy(seps, weights, x_bins=rp_bins, statistic='sum')
     wmeans = msum / wsum
 
-    return rp_bin_centers, wmeans
+    return rp_bin_centers, wmeans, pair_counts
         
 def get_cov_matrix_from_regions(signal_regions):
     '''signal_regions is array of shape (n_regions, n_bins)'''
