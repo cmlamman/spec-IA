@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import glob
+import pickle
 
 import warnings
 
@@ -19,8 +20,8 @@ cosmo = LambdaCDM(H0=H0, Om0=0.286, Ode0=0.714)
 h = H0/100
 
 
-#import sys
-#sys.path.append('/global/homes/c/clamman/IA/')
+import sys
+sys.path.append('/global/homes/c/clamman/IA/')
 
 import pathlib
 parent_path = pathlib.Path.cwd().parent
@@ -29,11 +30,48 @@ if 'IA' not in str(parent_path):   # for working in other directories. May need 
     print('Parent path is not the IA directory. Assuming parent directory is IA')
 
 # reading in a file for the power spectrum
-ps_path = parent_path / 'spec-IA/example_data/AbacusSummit_base_c000_z0.800_power_nfft2048.csv' #ps_path = parent_path / 'spec-IA/example_data/AbacusSummit_base_c000_z0.800_power_nfft2048.csv'
+ps_path = parent_path / 'spec-IA/example_catalogs/AbacusSummit_base_c000_z0.800_power_nfft2048.csv'
 abacus_ps_nl = pd.read_csv(ps_path) # nonlinear matter power spectrum from AbacusSummit
 
-kz_spline_parent_paths = parent_path / 'spec-IA/example_data/kz_integral_splines/'
+kz_spline_parent_paths = parent_path / 'spec-IA/example_catalogs/kz_integral_splines/'
 kz_spline_paths = list(kz_spline_parent_paths.glob('*.npy')) # pre-computed values of the kz integral at given values of pimax, made with the above power spectum
+
+
+#####################################################################################################
+# INTEGRATION HELPERS (FROM CLAUDE)
+#####################################################################################################
+# scipy.integrate.romberg was deprecated in SciPy 1.12 and removed in 1.15.
+# The recommended replacement for 1D adaptive integration is scipy.integrate.quad.
+# This wrapper keeps the call sites below readable and preserves the tolerance we were using.
+def _quad(func, a, b, args=()):
+    val, _ = scipy.integrate.quad(func, a, b, args=args, epsabs=1.48e-8, epsrel=1.48e-8, limit=200)
+    return val
+
+
+def _quad_bessel_breaksum(func, a, b, Rmax, args=()):
+    """Integrate func from a to b by breaking at Bessel zeros of fancyJ.
+
+    fancyJ contains j0(K*R) and j1(K*R) whose zeros sit at K ~ n*pi/R.
+    Integrating each half-oscillation separately and summing is robust
+    against the adaptive integrator missing oscillations at high K.
+    """
+    n_zeros = int(np.ceil(b * Rmax / np.pi))
+    if n_zeros > 0:
+        zeros = np.pi * np.arange(1, n_zeros + 1) / Rmax
+        zeros = zeros[(zeros > a) & (zeros < b)]
+        edges = np.concatenate(([a], zeros, [b]))
+    else:
+        edges = np.array([a, b])
+
+    total = 0.0
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        piece, _ = scipy.integrate.quad(
+            func, lo, hi, args=args,
+            epsabs=1e-12, epsrel=1e-9, limit=200,
+        )
+        total += piece
+    return total
+
 
 #####################################################################################################
 # GENRAL COSMOLOGY FUNCTIONS
@@ -105,7 +143,7 @@ def precompute_kz_integral(pimax_values, PS_data, directory, PS_min = 1e-4, PS_m
     
     if overwrite == False:
         if pi_weighting == False:
-            if all([os.path.exists(directory+'/kz_integral_NL_spl_pimax_'+str(pmi)+'.npy') for pmi in pimax_values]):
+            if all([os.path.exists(directory+'/kz_integral_NL_spl_pimax_'+str(round(float(pmi), 2))+'.npy') for pmi in pimax_values]):
                 print('All files exist. Skipping')
                 return None
         else:
@@ -116,7 +154,7 @@ def precompute_kz_integral(pimax_values, PS_data, directory, PS_min = 1e-4, PS_m
     warnings.filterwarnings(warning_handling)
     
     # using interpolation to get P(k)
-    tck_PS = interpolate.splrep(np.log10(PS_data['k']), np.log10(PS_data['P']), s=4e-3)
+    tck_PS = interpolate.splrep(np.log10(PS_data['k']), np.log10(PS_data['P']), s=0)
     
     def get_PS(k):
         return 10**(interpolate.splev(np.log10(k), tck_PS))
@@ -156,19 +194,21 @@ def precompute_kz_integral(pimax_values, PS_data, directory, PS_min = 1e-4, PS_m
         for pmi in pimax_values:
             kz_integral_values = []
             for K in Ks_sample_values:
-                kz_integral_values.append(scipy.integrate.romberg(kz_integrand, a=PS_min, b=PS_max, args=[K, pmi], rtol=1.48e-8, divmax=15)) # integrate over kz
-            tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=1e-3)
+                kz_integral_values.append(_quad(kz_integrand, a=PS_min, b=PS_max, args=(K, pmi))) # integrate over kz
+            tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=0)
             
-            # save the spline
-            print('saving for pimax =', pmi)
-            np.save(directory+'/kz_integral_NL_spl_pimax_'+str(pmi)+'.npy', tck_kz_integral)
+            # save the spline (round pimax to 2 decimal places in filename)
+            pmi_rounded = round(float(pmi), 2)
+            print('saving for pimax =', pmi_rounded)
+            with open(directory+'/kz_integral_NL_spl_pimax_'+str(pmi_rounded)+'.npy', 'wb') as f:
+                pickle.dump(tck_kz_integral, f)
     
     else:
         kz_integral_values = []
         for K in Ks_sample_values:
-            value = scipy.integrate.romberg(kz_integrand, a=PS_min, b=PS_max, args=[K], rtol=1.48e-8, divmax=15)
+            value = _quad(kz_integrand, a=PS_min, b=PS_max, args=(K,))
             kz_integral_values.append(value) # integrate over kz
-        tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=1e-3)
+        tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=0)
         print('saving pimax-weighted values for rp =', pimax_rp)
         with open(directory+'/kz_integral_NL_spl_Wpimaxrp_'+str(n_gaussians)+'D_'+str(pimax_rp)+'.pkl', 'wb') as f:
             pickle.dump(tck_kz_integral, f)
@@ -203,7 +243,7 @@ def precompute_kz_integral_1D_gauss_limber(pimax_values, PS_data, directory, gau
     Ks_sample_values = np.logspace(np.log10(PS_min), np.log10(PS_max), n_samples)    
 
     kz_integral_values = gauss_std * get_PS(Ks_sample_values)
-    tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=1e-3)
+    tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=0)
     print('saving values for rp =', pimax_rp)
     with open(directory+'/kz_integral_NL_spl_Wpimaxrp_1D_limber_'+str(pimax_rp)+'.pkl', 'wb') as f:
         pickle.dump(tck_kz_integral, f)
@@ -253,30 +293,19 @@ def compute_rel_e_model(rel_e_measurement, wp_measurement, pimax_values, b_gal, 
 
         
     # read in the pre-computed value of the kz integral (made with precompute_kz_integral)
-    splines = [np.load(path, allow_pickle=True) for path in precomputed_kz_integral_paths]
-    pimax_values = [round(float(path.split('_')[-1].split('.npy')[0]), 2) for path in precomputed_kz_integral_paths]
+    splines = {}
+    for path in precomputed_kz_integral_paths:
+        pmi_str = path.split('_')[-1].split('.npy')[0]
+        pmi_key = round(float(pmi_str), 2)
+        splines[pmi_key] = np.load(path, allow_pickle=True)
 
     def get_kz_integral_spl(K, pimax, b_gal):
-        try:
-            i_to_use = list(pimax_values).index(round(pimax, 2))
-        except ValueError:
+        pmi_key = round(float(pimax), 2)
+        if pmi_key not in splines:
             print('Pimax value not found in pre-computed values. Use precompute_kz_integral() to generate first. Continuing with a pimax value of 30.0 Mpc/h')
-            pimax = 30
-            i_to_use = list(pimax_values).index(round(pimax, 2))
+            pmi_key = 30.0
         front_constant = b_gal * pimax / np.pi
-        return front_constant * (interpolate.splev(np.log10(K), splines[i_to_use]))
-    
-    # for last ingetral
-    def K_integrand(K, Rmin, Rmax, pimax, b_gal, PS_min = 10**-4, PS_max = 100):
-        kz_integral = get_kz_integral_spl(K, pimax, b_gal)
-        return K * get_fancyJ(Rmin, Rmax, K) * kz_integral
-
-    def get_model_est(Rmin, Rmax, pimax, b_gal, tau=1, PS_min = 10**-4, PS_max = 100):
-        
-        bar_wp = get_bar_wp(Rmin, Rmax)
-        K_integral = scipy.integrate.romberg(K_integrand, a=PS_min, b=PS_max, args=[Rmin, Rmax, pimax, b_gal], rtol=1.48e-8, divmax=15) # integrate over K
-        
-        return tau * K_integral / (2*pimax + bar_wp)
+        return front_constant * (interpolate.splev(np.log10(K), splines[pmi_key]))
     
     randoms = 0
     if rel_e_randoms is not None:
@@ -297,18 +326,17 @@ def compute_rel_e_model(rel_e_measurement, wp_measurement, pimax_values, b_gal, 
         return R * get_wp(R)
 
     def get_bar_wp(Rmin, Rmax):
-        wp_integral = scipy.integrate.romberg(wp_integrand, a=Rmin, b=Rmax, rtol=1.48e-8, divmax=15) # integrate over R
+        wp_integral = _quad(wp_integrand, a=Rmin, b=Rmax) # integrate over R
         return (2 / (Rmax**2 - Rmin**2)) * wp_integral
     
-    # for last ingetral
-    def K_integrand(K, Rmin, Rmax, pimax, b_gal, PS_min = 10**-4, PS_max = 100):
+    def K_integrand(K, Rmin, Rmax, pimax, b_gal):
         kz_integral = get_kz_integral_spl(K, pimax, b_gal)
         return K * get_fancyJ(Rmin, Rmax, K) * kz_integral
     
     def get_model_est(Rmin, Rmax, pimax, b_gal, tau=1, PS_min = 10**-4, PS_max = 100):
         bar_wp = get_bar_wp(Rmin, Rmax)
-        K_integral = scipy.integrate.romberg(K_integrand, a=PS_min, b=PS_max, args=[Rmin, Rmax, pimax, b_gal], rtol=1.48e-8, divmax=15) # integrate over K
-        
+        K_integral = _quad_bessel_breaksum(K_integrand, PS_min, PS_max, Rmax=Rmax,
+                                           args=(Rmin, Rmax, pimax, b_gal))
         return -tau * K_integral / (2*pimax + bar_wp)
     
     # computing the model prediction in each bin of projected separation
@@ -359,30 +387,20 @@ def get_rel_e_model(R_bin_min, R_bin_max, pimax_values, wp_values, b_gal, z = 0.
 
         
     # read in the pre-computed value of the kz integral (made with precompute_kz_integral)
-    splines = [np.load(path, allow_pickle=True) for path in precomputed_kz_integral_paths]
-    pimax_kz_values = [round(float(path.split('_')[-1].split('.npy')[0]), 2) for path in precomputed_kz_integral_paths]
+    splines = {}
+    for path in precomputed_kz_integral_paths:
+        pmi_str = path.split('_')[-1].split('.npy')[0]
+        pmi_key = round(float(pmi_str), 2)
+        with open(path, 'rb') as f:
+            splines[pmi_key] = pickle.load(f)
 
     def get_kz_integral_spl(K, pimax, b_gal):
-        try:
-            i_to_use = list(pimax_kz_values).index(round(pimax, 2))
-        except ValueError:
-            print('Pimax value of ', pimax, 'not found in pre-computed values. Use precompute_kz_integral() to generate first. Continuing with a pimax value of 30.0 Mpc/h')
-            pimax = 30
-            i_to_use = list(pimax_kz_values).index(round(pimax, 2))
+        pmi_key = round(float(pimax), 2)
+        if pmi_key not in splines:
+            print('Pimax value of', pmi_key, 'not found in pre-computed values. Use precompute_kz_integral() to generate first. Continuing with a pimax value of 30.0 Mpc/h')
+            pmi_key = 30.0
         front_constant = b_gal * pimax / np.pi
-        return front_constant * (interpolate.splev(np.log10(K), splines[i_to_use]))
-    
-    # for last ingetral
-    def K_integrand(K, Rmin, Rmax, pimax, b_gal, PS_min = 10**-4, PS_max = 100):
-        kz_integral = get_kz_integral_spl(K, pimax, b_gal)
-        return K * get_fancyJ(Rmin, Rmax, K) * kz_integral
-
-    def get_model_est(Rmin, Rmax, pimax, b_gal, tau=1, PS_min = 10**-4, PS_max = 100):
-        
-        bar_wp = get_bar_wp(Rmin, Rmax)
-        K_integral = scipy.integrate.romberg(K_integrand, a=PS_min, b=PS_max, args=[Rmin, Rmax, pimax, b_gal], rtol=1.48e-8, divmax=15) # integrate over K
-        
-        return tau * K_integral / (2*pimax + bar_wp)
+        return front_constant * (interpolate.splev(np.log10(K), splines[pmi_key]))
         
     R_bin_centers = (R_bin_min+R_bin_max)/2
     R_bin_edges = np.append(np.asarray(R_bin_min), R_bin_max[-1])
@@ -395,17 +413,17 @@ def get_rel_e_model(R_bin_min, R_bin_max, pimax_values, wp_values, b_gal, z = 0.
         return R * get_wp(R)
 
     def get_bar_wp(Rmin, Rmax):
-        wp_integral = scipy.integrate.romberg(wp_integrand, a=Rmin, b=Rmax, rtol=1.48e-8, divmax=15) # integrate over R
+        wp_integral = _quad(wp_integrand, a=Rmin, b=Rmax) # integrate over R
         return (2 / (Rmax**2 - Rmin**2)) * wp_integral
     
-    # for last ingetral
-    def K_integrand(K, Rmin, Rmax, pimax, b_gal, PS_min = 10**-4, PS_max = 100):
+    def K_integrand(K, Rmin, Rmax, pimax, b_gal):
         kz_integral = get_kz_integral_spl(K, pimax, b_gal)
         return K * get_fancyJ(Rmin, Rmax, K) * kz_integral
     
     def get_model_est(Rmin, Rmax, pimax, b_gal, tau=1, PS_min = 10**-4, PS_max = 100):
         bar_wp = get_bar_wp(Rmin, Rmax)
-        K_integral = scipy.integrate.romberg(K_integrand, a=PS_min, b=PS_max, args=[Rmin, Rmax, pimax, b_gal], rtol=1.48e-8, divmax=15) # integrate over K
+        K_integral = _quad_bessel_breaksum(K_integrand, PS_min, PS_max, Rmax=Rmax,
+                                           args=(Rmin, Rmax, pimax, b_gal))
         return -tau * K_integral / (2*pimax + bar_wp)
     
     # computing the model prediction in each bin of projected separation
