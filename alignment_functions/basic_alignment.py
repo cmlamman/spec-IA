@@ -228,11 +228,11 @@ def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, abs_e=None
     if loc_weights is not None:
         loc_weights = np.append(loc_weights, 0)
     
-    center_coords = np.repeat(ang_tracers, [len(i) for i in ii], axis=0)
-    center_angles = np.repeat(ang_values, [len(i) for i in ii])
+    center_coords = np.repeat(ang_tracers, np.fromiter((len(i) for i in ii), dtype=np.intp, count=len(ii)), axis=0)
+    center_angles = np.repeat(ang_values, np.fromiter((len(i) for i in ii), dtype=np.intp, count=len(ii)))
     neighbor_coords = loc_tracers[np.concatenate(ii)]
     if abs_e is not None:
-        center_abs_e = np.repeat(abs_e, [len(i) for i in ii])
+        center_abs_e = np.repeat(abs_e, np.fromiter((len(i) for i in ii), dtype=np.intp, count=len(ii)))
     
     # breaking it up to save memory
     nc = neighbor_coords**2
@@ -323,16 +323,34 @@ def rel_angle_regions(group_info, loc_tracers, tracer_weights=None, n_regions = 
             
             group_square = groups_dec_slice[ra_sorter[n:m]]
             
+            # NEW: pull out E_ABS if present, else use 1
+            if 'E_ABS' in group_square.colnames:
+                abs_e = np.asarray(group_square['E_ABS'])
+            else:
+                abs_e = None
+            
             if return_los==False:
-                proj_dist, pa_rel, weights = calculate_rel_ang_cartesian(group_square['center_loc'], group_square['orientation'], loc_tracers, loc_weights=tracer_weights, 
-                                                                         pimax=pimax, max_proj_sep = max_proj_sep, max_neighbors=max_neighbors, return_los=False)
+                proj_dist, pa_rel, weights = calculate_rel_ang_cartesian(
+                    group_square['center_loc'], group_square['orientation'],
+                    loc_tracers, loc_weights=tracer_weights,
+                    abs_e=abs_e,                                # NEW
+                    pimax=pimax, max_proj_sep=max_proj_sep,
+                    max_neighbors=max_neighbors, return_los=False)
             elif return_los==True:
-                proj_dist, pa_rel, weights, los_seps = calculate_rel_ang_cartesian(group_square['center_loc'], group_square['orientation'], loc_tracers, loc_weights=tracer_weights, 
-                                                                         pimax=pimax, max_proj_sep = max_proj_sep, max_neighbors=max_neighbors, return_los=return_los)
+                proj_dist, pa_rel, weights, los_seps = calculate_rel_ang_cartesian(
+                    group_square['center_loc'], group_square['orientation'],
+                    loc_tracers, loc_weights=tracer_weights,
+                    abs_e=abs_e,                                # NEW
+                    pimax=pimax, max_proj_sep=max_proj_sep,
+                    max_neighbors=max_neighbors, return_los=return_los)
                 all_los_seps.append(los_seps)
             
             all_proj_dists.append(proj_dist)
-            all_pa_rels.append(np.cos(2*pa_rel))
+            
+            if abs_e is not None:
+                all_pa_rels.append(pa_rel)
+            else:
+                all_pa_rels.append(np.cos(2*pa_rel))
             all_weights.append(weights)
             
             n += n_in_ra_slice
@@ -454,9 +472,9 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
     loc_tracers = np.vstack((loc_tracers, np.full(len(loc_tracers[0]), np.inf)))   # adding placeholder row for when neighbor not found
     loc_weights = np.append(loc_weights, 0)
     
-    center_coords = np.repeat(ang_tracers, [len(i) for i in ii], axis=0)
-    center_angles = np.repeat(ang_values, [len(i) for i in ii])
-    center_E = np.repeat(E_ABS, [len(i) for i in ii])
+    center_coords = np.repeat(ang_tracers, np.fromiter((len(i) for i in ii), dtype=np.intp, count=len(ii)), axis=0)
+    center_angles = np.repeat(ang_values, np.fromiter((len(i) for i in ii), dtype=np.intp, count=len(ii)))
+    center_E = np.repeat(E_ABS, np.fromiter((len(i) for i in ii), dtype=np.intp, count=len(ii)))
     
     concat_indices = np.concatenate(ii).astype(int)
     neighbor_weights = loc_weights[concat_indices]
@@ -559,9 +577,71 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
         
 
 
-# New function that calculates realtive ellipticities but bins in sep earlier to save memory
+# Top-level helper for joblib.Parallel. Must be at module scope (not nested
+# inside rel_angle_regions_binned) so that loky's process pool can pickle it.
+def _process_one_binned_region(region_spec, loc_tracers, tracer_weights,
+                                R_bins, pimax, tracer_behind, return_pair_counts,
+                                intermediate_save_paths, print_progress):
+    """Run calculate_rel_ang_cartesian_binAverage for a single sky region.
+ 
+    region_spec is a dict built by the driver; contains the pre-extracted
+    plain numpy arrays for this region so workers don't need to pickle an
+    astropy Table slice.
+    """
+    j = region_spec['j']
+    n = region_spec['n']
+    center_loc = region_spec['center_loc']
+    orientation = region_spec['orientation']
+    E_ABS = region_spec['E_ABS']
+ 
+    save_path = None
+    if intermediate_save_paths is not None:
+        save_path = intermediate_save_paths + '_' + str(j) + '_' + str(n) + '.npy'
+        # resume-safe skip: if the file already exists, just load it.
+        # Matches the original function's behavior.
+        if os.path.exists(save_path):
+            pa_rel_binned = np.load(save_path)
+            n_pairs = None
+            if return_pair_counts:
+                pc_path = intermediate_save_paths + '_' + str(j) + '_' + str(n) + '_paircounts.npy'
+                if os.path.exists(pc_path):
+                    n_pairs = np.load(pc_path)
+            return j, n, pa_rel_binned, n_pairs
+ 
+    if print_progress:
+        print('Working on region', j, n, flush=True)
+ 
+    if return_pair_counts:
+        pa_rel_binned, n_pairs = calculate_rel_ang_cartesian_binAverage(
+            ang_tracers=center_loc, ang_values=orientation,
+            loc_tracers=loc_tracers, loc_weights=tracer_weights, E_ABS=E_ABS,
+            R_bins=R_bins, pimax=pimax, print_progress=False,
+            tracer_behind=tracer_behind, return_pair_counts=True,
+        )
+    else:
+        pa_rel_binned = calculate_rel_ang_cartesian_binAverage(
+            ang_tracers=center_loc, ang_values=orientation,
+            loc_tracers=loc_tracers, loc_weights=tracer_weights, E_ABS=E_ABS,
+            R_bins=R_bins, pimax=pimax, print_progress=False,
+            tracer_behind=tracer_behind,
+        )
+        n_pairs = None
+ 
+    pa_rel_binned = np.asarray(pa_rel_binned)
+    if intermediate_save_paths is not None:
+        np.save(save_path, pa_rel_binned)
+        if return_pair_counts and n_pairs is not None:
+            np.save(
+                intermediate_save_paths + '_' + str(j) + '_' + str(n) + '_paircounts.npy',
+                np.asarray(n_pairs),
+            )
+ 
+    return j, n, pa_rel_binned, n_pairs
+
+
+# New function that calculates realtive ellipticities but bins in sep earlier to save memory - also can run on multiple cores
 def rel_angle_regions_binned(orientation_catalog, loc_tracers, tracer_weights, R_bins, use_E_ABS=False, n_regions=100, pimax=30, 
-                             keep_as_regions=False, print_progress=False, intermediate_save_paths=None, tracer_behind=False, return_pair_counts=False):
+                             keep_as_regions=False, print_progress=False, intermediate_save_paths=None, tracer_behind=False, return_pair_counts=False, n_jobs=1):
     '''
     Divides the orientation catalog into n_regions by RA and DEC, calculate cos(2*theta) the orientations relative to the tracers
     in bins of projected separation on the sky, R_bins. The measurement in each bin is measured relative to the full tracer sample.
@@ -586,6 +666,11 @@ def rel_angle_regions_binned(orientation_catalog, loc_tracers, tracer_weights, R
         Can also be list of size (R_bins-1) to use a different pimax for each R bin
     return_pair_counts : bool, optional
         if True, also returns number of pairs in each bin ( to get 2PCF)
+    n_jobs : int, optional
+        Number of parallel worker processes for sky regions, via joblib. Default is 1
+        (sequential, reproducing the original behavior). Set to -1 to use all
+        available cores. Each region is independent, so parallelism is lossless.
+
     
     Returns
     -------
@@ -601,100 +686,94 @@ def rel_angle_regions_binned(orientation_catalog, loc_tracers, tracer_weights, R
     
     ## START BY LOOPING OVER THE SKY REGIONS
     
-    # sort ang_tracers and ang_values by DEC
     dec_sorter = np.argsort(orientation_catalog['DEC'])
-    
-    # divide catalogs into regions
     n_slices = int(np.sqrt(n_regions))
-    n_in_dec_slice = int((len(orientation_catalog) / n_slices)+1)
-    j = 0 
+    n_in_dec_slice = int((len(orientation_catalog) / n_slices) + 1)
+ 
+    specs = []
+    j = 0
     k = n_in_dec_slice
-    
-    all_pa_rels = []
-    all_pair_counts = []
-    all_region_files = []
-    for _ in range(n_slices):   # loop over DEC slices
-        
-        # for handling the last region
-        if k > len(orientation_catalog):     
+    for _ in range(n_slices):
+        if k > len(orientation_catalog):
             k = len(orientation_catalog)
         if len(orientation_catalog[j:k]) == 0:
+            j += n_in_dec_slice; k += n_in_dec_slice
             continue
-        
-        # slice in DEC
+ 
         groups_dec_slice = orientation_catalog[dec_sorter[j:k]]
-        
-        # sort this slice by RA
         ra_sorter = np.argsort(groups_dec_slice['RA'])
-        n_in_ra_slice = int((len(groups_dec_slice) / n_slices)+1)
+        n_in_ra_slice = int((len(groups_dec_slice) / n_slices) + 1)
+ 
         n = 0
         m = n_in_ra_slice
-        
-        for _ in range(n_slices):       # loop over RA regions in this DEC slice
-            
-            if intermediate_save_paths is not None:
-                # check to see if the file already exists
-                if os.path.exists(intermediate_save_paths+'_'+str(j)+'_'+str(n)+'.npy'):
-                    n += n_in_ra_slice
-                    m += n_in_ra_slice
-                    all_region_files.append(intermediate_save_paths+'_'+str(j)+'_'+str(n)+'.npy')
-                    continue
-                
-            if print_progress: print('Working on region', j, n)
-            
-            # for handling the last region
-            if m > len(groups_dec_slice):     
+        for _ in range(n_slices):
+            if m > len(groups_dec_slice):
                 m = len(groups_dec_slice)
             if len(groups_dec_slice[n:m]) == 0:
+                n += n_in_ra_slice; m += n_in_ra_slice
                 continue
-            
+ 
             group_square = groups_dec_slice[ra_sorter[n:m]]
-            
-            E_ABS = np.asarray([1]*len(group_square))
-            if use_E_ABS==True:
-                E_ABS = group_square['E_ABS']
-
-            # returns the relative angles in each R bin for this region, array of size (len(R_bins)-1)
-            
-            if return_pair_counts==False:
-                pa_rel_binned = calculate_rel_ang_cartesian_binAverage(ang_tracers = group_square['center_loc'], ang_values = group_square['orientation'], 
-                                                                   loc_tracers = loc_tracers, loc_weights=tracer_weights, E_ABS=E_ABS, 
-                                                                   R_bins=R_bins, pimax=pimax, print_progress=print_progress, 
-                                                                   tracer_behind=tracer_behind)
-            elif return_pair_counts==True:
-                pa_rel_binned, n_pairs = calculate_rel_ang_cartesian_binAverage(ang_tracers = group_square['center_loc'], ang_values = group_square['orientation'], 
-                                                                   loc_tracers = loc_tracers, loc_weights=tracer_weights, E_ABS=E_ABS, 
-                                                                   R_bins=R_bins, pimax=pimax, print_progress=print_progress, 
-                                                                   tracer_behind=tracer_behind, return_pair_counts=True)
-            
-            if intermediate_save_paths is not None:
-                np.save(intermediate_save_paths+'_'+str(j)+'_'+str(n)+'.npy', pa_rel_binned)
-                if return_pair_counts==True:
-                    np.save(intermediate_save_paths+'_'+str(j)+'_'+str(n)+'_paircounts.npy', n_pairs)
-            elif intermediate_save_paths is None:    
-                all_pa_rels.append(pa_rel_binned)
-                if return_pair_counts==True:
-                    all_pair_counts.append(n_pairs)
-            
+ 
+            # Pull out the arrays this region needs. Doing it here in the
+            # driver means worker processes receive plain numpy arrays
+            # instead of having to pickle astropy Table slices.
+            if use_E_ABS:
+                E_ABS = np.asarray(group_square['E_ABS'])
+            else:
+                E_ABS = np.ones(len(group_square))
+ 
+            specs.append({
+                'j': j,
+                'n': n,
+                'center_loc': np.asarray(group_square['center_loc']),
+                'orientation': np.asarray(group_square['orientation']),
+                'E_ABS': E_ABS,
+            })
             n += n_in_ra_slice
             m += n_in_ra_slice
-        
+ 
         j += n_in_dec_slice
         k += n_in_dec_slice
-        
+ 
+    if print_progress:
+        print('Dispatching', len(specs), 'regions across', n_jobs, 'workers', flush=True)
+ 
+    # Make sure the big shared arrays are contiguous so joblib can memmap
+    # them across workers instead of copying per-process.
+    loc_tracers = np.ascontiguousarray(loc_tracers)
+    tracer_weights = np.ascontiguousarray(tracer_weights)
+ 
+    # ---- Run the regions ----
+    # n_jobs=1 reproduces the original sequential behavior exactly (joblib
+    # runs in-process with minimal overhead in that case).
+    from joblib import Parallel, delayed
+    results = Parallel(n_jobs=n_jobs, backend='loky')(
+        delayed(_process_one_binned_region)(
+            spec, loc_tracers, tracer_weights, R_bins, pimax,
+            tracer_behind, return_pair_counts,
+            intermediate_save_paths, print_progress,
+        )
+        for spec in specs
+    )
+ 
+    # ---- Collect ----
     if intermediate_save_paths is not None:
-        print('Complete. Region results saved to '+intermediate_save_paths)
+        print('Complete. Region results saved to ' + intermediate_save_paths)
         return None
-    all_pa_rels = np.array(all_pa_rels)
+ 
+    # Sort results deterministically to match the original return order
+    results.sort(key=lambda r: (r[0], r[1]))
+    all_pa_rels = np.array([r[2] for r in results])
     all_pair_counts = None
-    if return_pair_counts==True:
-        all_pair_counts = np.array(all_pair_counts)
-    if keep_as_regions==True:
+    if return_pair_counts:
+        all_pair_counts = np.array([r[3] for r in results])
+ 
+    if keep_as_regions:
         return all_pa_rels, all_pair_counts
-        
-    elif keep_as_regions==False:
-        pa_rel_av = np.nanmean(all_pa_rels, axis=0)
-        pa_rel_e = np.nanstd(all_pa_rels, axis=0) / np.sqrt(len(all_pa_rels))
-        if return_pair_counts==True:
-            all_pair_counts = np.nansum(all_pair_counts, axis=0)
-        return pa_rel_av, pa_rel_e, all_pair_counts
+ 
+    pa_rel_av = np.nanmean(all_pa_rels, axis=0)
+    pa_rel_e = np.nanstd(all_pa_rels, axis=0) / np.sqrt(len(all_pa_rels))
+    if return_pair_counts:
+        all_pair_counts = np.nansum(all_pair_counts, axis=0)
+    return pa_rel_av, pa_rel_e, all_pair_counts

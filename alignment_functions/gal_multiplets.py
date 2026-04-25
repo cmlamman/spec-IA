@@ -228,7 +228,7 @@ def make_group_catalog(data_catalog, comoving_points=None, transverse_max = 1, l
 
 def get_multiplet_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins=np.logspace(0, 2, 10), pimax=30, cosmology=cosmo, print_progress=False, 
                         n_sky_regions=100, save_path=None, pair_max_los=6, pair_max_transverse=1, pair_min_transverse=None, early_binning=False, keep_intermediate=False,
-                        truez=False, intermediate_save_paths=None, return_pair_counts=False, already_multiplets=False):
+                        truez=False, intermediate_save_paths=None, return_pair_counts=False, already_multiplets=False, n_jobs=1):
     '''
     Calculate the alignment of galaxy multiplets (sometimes called 'groups' here) within the given catalog, relative to tracers from the same catalog or other, if provided. 
     Saves results to save_path, if provided.
@@ -288,7 +288,7 @@ def get_multiplet_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins
         
         rel_angle_regions_binned(group_catalog, loc_tracers = comoving_points_tracers,  tracer_weights = catalog_for_tracers['WEIGHT'],
                                                     R_bins=R_bins, n_regions=n_sky_regions, pimax=pimax, keep_as_regions=False, print_progress=print_progress, 
-                                                    intermediate_save_paths=intermediate_save_paths, return_pair_counts=return_pair_counts)
+                                                    intermediate_save_paths=intermediate_save_paths, return_pair_counts=return_pair_counts, n_jobs=n_jobs)
         # reading in the calculated results
         if print_progress:
             print('Reading in region results')
