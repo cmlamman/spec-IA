@@ -150,32 +150,32 @@ def get_cosmo_psep_pa(ra1, dec1, ra2, dec2, z1, z2, u_coords='deg'):
     return psep, pa
 
 
-def get_proj_dist(pos1, pos2, pos_obs=np.asarray([0, 0, 0]) * .7, use_cat=False):
-    '''Return transverse projected distance of two positions given observer position. Returns in same units as given. Default is Mpc/h'''
+def get_proj_dist(pos1, pos2, pos_obs=np.asarray([0, 0, 0]) * .7, use_cat=False, los_mode='radial'):
+    '''Return transverse projected distance of two positions. Returns in same units as given.'''
     if use_cat:
         pos1 = pos1['x_L2com']
         pos2 = pos2['x_L2com']
-        
-    # separation vector components
+
     dx = pos2[:, 0] - pos1[:, 0]
     dy = pos2[:, 1] - pos1[:, 1]
     dz = pos2[:, 2] - pos1[:, 2]
-    d2 = dx * dx + dy * dy + dz * dz
- 
-    # midpoint LOS vector (not yet unit)
-    ox = 0.5 * (pos2[:, 0] + pos1[:, 0]) - pos_obs[0]
-    oy = 0.5 * (pos2[:, 1] + pos1[:, 1]) - pos_obs[1]
-    oz = 0.5 * (pos2[:, 2] + pos1[:, 2]) - pos_obs[2]
-    onorm2 = ox * ox + oy * oy + oz * oz
- 
-    # (d . o_hat)^2  =  (d . o)^2 / |o|^2
-    dot = dx * ox + dy * oy + dz * oz
-    parallel2 = (dot * dot) / onorm2
- 
-    # guard against tiny negatives from floating-point cancellation
-    perp2 = d2 - parallel2
-    np.maximum(perp2, 0.0, out=perp2)
-    return np.sqrt(perp2)
+
+    if los_mode == 'z':
+        # plane-parallel LOS along +z: transverse separation is just sqrt(dx^2 + dy^2)
+        return np.sqrt(dx * dx + dy * dy)
+    elif los_mode == 'radial':
+        d2 = dx * dx + dy * dy + dz * dz
+        ox = 0.5 * (pos2[:, 0] + pos1[:, 0]) - pos_obs[0]
+        oy = 0.5 * (pos2[:, 1] + pos1[:, 1]) - pos_obs[1]
+        oz = 0.5 * (pos2[:, 2] + pos1[:, 2]) - pos_obs[2]
+        onorm2 = ox * ox + oy * oy + oz * oz
+        dot = dx * ox + dy * oy + dz * oz
+        parallel2 = (dot * dot) / onorm2
+        perp2 = d2 - parallel2
+        np.maximum(perp2, 0.0, out=perp2)
+        return np.sqrt(perp2)
+    else:
+        raise ValueError("los_mode must be 'radial' or 'z'")
 
 ############
 # CARTESIAN FUNCTIONS
@@ -224,37 +224,38 @@ def get_points_in_plane(group_points, los_location=np.asarray([0,0,0]), n_groups
     
     return group_points_in_plane
 
-def get_orientation_angle_cartesian(points1, points2, los_location=np.asarray([0,0,0])):
+def get_orientation_angle_cartesian(points1, points2, los_location=np.asarray([0, 0, 0]), los_mode='radial'):
     '''
-    get the orientation of a points1 relative to points2 projected onto a plane perpendicular to the LOS
-    points1: array of shape (n_points, 3)
-    points2: array of shape (n_points, 3)
-    return: array of shape (n_points,)
-    return the orientation relative to "North"
-    "North" (or y-axis) is assumed to be the projection of the z-axis onto the plane of the sky
+    Get the orientation of points1 relative to points2 projected onto a plane perpendicular to the LOS.
+    "North" is +y for los_mode='z', or the projection of +z onto the sky plane for los_mode='radial'.
+
+    points1, points2: arrays of shape (n_points, 3)
+    los_location: observer location (used only when los_mode='radial')
+    los_mode: 'radial' or 'z'
+    returns: array of shape (n_points,)
     '''
-    # LOS unit vector at pair midpoint
-    mx = 0.5 * (points1[:, 0] + points2[:, 0]) - los_location[0]
-    my = 0.5 * (points1[:, 1] + points2[:, 1]) - los_location[1]
-    mz = 0.5 * (points1[:, 2] + points2[:, 2]) - los_location[2]
-    mnorm = np.sqrt(mx * mx + my * my + mz * mz)
-    nx = mx / mnorm
-    ny = my / mnorm
-    nz = mz / mnorm
- 
-    # separation vector
     dx = points2[:, 0] - points1[:, 0]
     dy = points2[:, 1] - points1[:, 1]
     dz = points2[:, 2] - points1[:, 2]
- 
-    # projections onto the (unnormalized) sky-plane basis:
-    #   d . perp_vector  * s = dx*ny - dy*nx
-    #   d . perp_vector2 * s = nz*(d . n_hat) - dz
-    proj_alpha = dx * ny - dy * nx
-    d_dot_n = dx * nx + dy * ny + dz * nz
-    proj_delta = nz * d_dot_n - dz
- 
-    return np.arctan2(proj_alpha, proj_delta)
+
+    if los_mode == 'z':
+        # plane-parallel LOS along +z: sky plane is xy, North = +y, East = +x
+        # position angle of the separation: arctan2(dx, dy)  (East-of-North)
+        return np.arctan2(dx, dy)
+    elif los_mode == 'radial':
+        mx = 0.5 * (points1[:, 0] + points2[:, 0]) - los_location[0]
+        my = 0.5 * (points1[:, 1] + points2[:, 1]) - los_location[1]
+        mz = 0.5 * (points1[:, 2] + points2[:, 2]) - los_location[2]
+        mnorm = np.sqrt(mx * mx + my * my + mz * mz)
+        nx = mx / mnorm
+        ny = my / mnorm
+        nz = mz / mnorm
+        proj_alpha = dx * ny - dy * nx
+        d_dot_n = dx * nx + dy * ny + dz * nz
+        proj_delta = nz * d_dot_n - dz
+        return np.arctan2(proj_alpha, proj_delta)
+    else:
+        raise ValueError("los_mode must be 'radial' or 'z'")
 
 
 def projected_separation_ra_dec(ra1, dec1, x1, y1, z1, ra2, dec2, x2, y2, z2): 

@@ -4,7 +4,7 @@ from astropy.io import fits
 # make all fonts larger
 plt.rcParams.update({'font.size': 14})
 
-def plot_MIA_mu_bins(result_paths, estimator, title=None, save_path=None, cmap='seismic', ylim=None, vlim=None, mu_sym=False, plot_mu_averaged=False):
+def plot_MIA_mu_bins(result_paths, estimator, paths_to_subtract = None, title=None, save_path=None, cmap='seismic', ylim=None, vlim=None, mu_sym=False, plot_mu_averaged=False):
     """
     Plots the MIA results measured in bins of separation s and angle mu wrt the line of sight.
     
@@ -15,6 +15,8 @@ def plot_MIA_mu_bins(result_paths, estimator, title=None, save_path=None, cmap='
         The estimator used (e.g., 'x+', 'g+', '++').
     - save_path: str or None
         If provided, saves the plot to this path. Otherwise, displays the plot.
+    - paths_to_subtract: list of str or None
+        List of file paths to subtract from the main results.
     """
     # Load data from FITS files
     print(f'Found {len(result_paths)} result files.')
@@ -44,9 +46,30 @@ def plot_MIA_mu_bins(result_paths, estimator, title=None, save_path=None, cmap='
     stderr2d[~nonzero] = np.nan
     
     
+    if paths_to_subtract is not None:
+        print(f'Subtracting results from {len(paths_to_subtract)} files.')
+        # read and stack the subtraction files
+        stack_subtract = np.empty((len(paths_to_subtract),) + sample.shape, dtype=np.float32)
+        for i,p in enumerate(paths_to_subtract):
+            try:
+                with fits.open(p) as h:
+                    stack_subtract[i] = h[0].data.astype(np.float32)
+            except TypeError:
+                print(f'Error reading file {p} for subtraction, skipping.')
+                stack_subtract[i] = np.nan
+        mean_subtract = np.nanmean(stack_subtract, axis=0)
+        # subtract from main mean2d
+        mean2d -= mean_subtract
+        stderr2d = np.sqrt(stderr2d**2 + np.nanvar(stack_subtract, axis=0)/stack_subtract.shape[0])
+    
     # averaging in mu to get s dependence
-    mean1d_s = np.nanmean(mean2d, axis=1)
-    stderr1d_s = np.nanmean(stderr2d, axis=1)
+    mu_bin_middles = (mu_bins[1:]+mu_bins[:-1])/2
+    pos_mu_mask = mu_bin_middles > 0
+    neg_mu_mask = mu_bin_middles < 0
+    mean1d_s_pos = np.nanmean(mean2d[:, pos_mu_mask], axis=1) if np.any(pos_mu_mask) else np.full(mean2d.shape[0], np.nan)
+    mean1d_s_neg = np.nanmean(mean2d[:, neg_mu_mask], axis=1) if np.any(neg_mu_mask) else np.full(mean2d.shape[0], np.nan)
+    stderr1d_s_pos = np.nanmean(stderr2d[:, pos_mu_mask], axis=1) if np.any(pos_mu_mask) else np.full(stderr2d.shape[0], np.nan)
+    stderr1d_s_neg = np.nanmean(stderr2d[:, neg_mu_mask], axis=1) if np.any(neg_mu_mask) else np.full(stderr2d.shape[0], np.nan)
     s_bin_middles = (s_bins[1:]+s_bins[:-1])/2
     
     if plot_mu_averaged:
@@ -55,6 +78,8 @@ def plot_MIA_mu_bins(result_paths, estimator, title=None, save_path=None, cmap='
         plt.subplots_adjust(wspace=0.4)
     else:
         fig = plt.figure(figsize=(15,6))
+        
+    
         
         
     # make title for entire figure
@@ -65,10 +90,14 @@ def plot_MIA_mu_bins(result_paths, estimator, title=None, save_path=None, cmap='
         plt.subplot(1,3,1)
     else:
         plt.subplot(1,2,1)
-    plt.errorbar(s_bin_middles, mean1d_s*s_bin_middles, yerr=stderr1d_s*s_bin_middles, fmt='o', capsize=4)
+    plt.errorbar(s_bin_middles, mean1d_s_pos*s_bin_middles, yerr=stderr1d_s_pos*s_bin_middles,
+                 fmt='o', capsize=4, label=r'$\mu>0$', alpha=.8)
+    plt.errorbar(s_bin_middles, mean1d_s_neg*s_bin_middles, yerr=stderr1d_s_neg*s_bin_middles,
+                 fmt='s', capsize=4, label=r'$\mu<0$', alpha=.8)
     plt.xscale('log')
     plt.xlabel(r'3D separation $s$ [$h^{-1}$ Mpc]')
     plt.ylabel(r'$s$ MIA$_{'+estimator+r'}$ [$h^{-1}$ Mpc]')
+    plt.legend()
     # draw thin grey line at y=0
     plt.axhline(0, color='grey', linestyle='--');
     if ylim is not None:
@@ -80,7 +109,6 @@ def plot_MIA_mu_bins(result_paths, estimator, title=None, save_path=None, cmap='
         # averaging in s to get mu dependence
         mean1d_mu = np.nanmean(mean2d, axis=0)
         stderr1d_mu = np.nanmean(stderr2d, axis=0)
-        mu_bin_middles = (mu_bins[1:]+mu_bins[:-1])/2
         if mu_sym:
             # average over mu and -mu
             mean1d_mu_flipped = mean1d_mu[::-1]
