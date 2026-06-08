@@ -494,7 +494,7 @@ def get_multiplet_alignment_randoms(catalog_for_groups, random_catalog_paths, R_
     
     
 def get_group_2pt_projected_corr(catalog, random_paths, catalog2=None, tracer_catalog=None, rp_bins=np.logspace(0, np.log10(150), 11), rpar_bins=np.linspace(0, 80, 101), 
-                                 use_sliding_pimax=False, print_progress=False, save_path=None):    
+                                 pair_max_los=1, pair_max_transverse=1, use_sliding_pimax=False, print_progress=False, save_path=None):    
     '''
     Calculate projected 2-point correlation functions between galaxy groups in catalog and the catalog (or a tracer catalog).
     bins are given in bin edges.
@@ -509,7 +509,7 @@ def get_group_2pt_projected_corr(catalog, random_paths, catalog2=None, tracer_ca
     else:
         pos = format_pos_for_cf(catalog2, z_column='Z')
     
-    catalog2 =  make_group_catalog(catalog)
+    catalog2 =  make_group_catalog(catalog, los_max=pair_max_los, transverse_max=pair_max_transverse)
     pos2 = format_pos_for_cf(catalog2, z_column='Z')
     pos_r2 = generate_randoms_zshuffle(catalog2)
     
