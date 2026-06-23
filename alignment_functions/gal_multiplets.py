@@ -563,9 +563,43 @@ def get_group_2pt_projected_corr(catalog, random_paths, catalog2=None, tracer_ca
 # HIGH_LEVEL FUNCTION FOR SIMULATION DATA
 #######################
 
+def _process_one_3D_batch(batch_index, group_batch_center_loc, group_batch_orientation, group_batch_n,
+                          tracer_points, R_bins, pimax_values, return_pair_counts,
+                          save_intermediate, batch_save_path, print_info, sim_label):
+    if batch_index % 50 == 0 and print_info:
+        print('working on batch', batch_index, 'sim:', sim_label, flush=True)
+
+    if os.path.exists(batch_save_path):
+        pa_rel_binned = np.load(batch_save_path)
+        pair_counts = None
+        if return_pair_counts:
+            pair_counts_save_path = batch_save_path.replace('.npy', '_paircounts.npy')
+            if os.path.exists(pair_counts_save_path):
+                pair_counts = np.load(pair_counts_save_path)
+        return batch_index, pa_rel_binned, pair_counts
+
+    pa_rel_binned = calculate_rel_ang_cartesian_binAverage(
+        ang_tracers=group_batch_center_loc, ang_values=group_batch_orientation,
+        loc_tracers=tracer_points, loc_weights=[1]*len(tracer_points),
+        E_ABS=np.ones(group_batch_n),
+        R_bins=R_bins, pimax=pimax_values, return_pair_counts=return_pair_counts)
+
+    pair_counts = None
+    if return_pair_counts:
+        pa_rel_binned, pair_counts = pa_rel_binned
+        if save_intermediate:
+            pair_counts_save_path = batch_save_path.replace('.npy', '_paircounts.npy')
+            np.save(pair_counts_save_path, pair_counts)
+
+    if save_intermediate:
+        np.save(batch_save_path, pa_rel_binned)
+
+    return batch_index, pa_rel_binned, pair_counts
+
+
 def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), np.log10(100), 16), pimax='variable', transverse_max = 1, los_max=1, print_info=True, sim_label='example',
                    periodic_boundary=False, n_batches = 10, save_intermediate=False, save_info=False,
-                   return_pair_counts=False):
+                   return_pair_counts=False, n_jobs=1):
     '''
     A high-level function to calculate projected multiplet alignment for a set of points in 3D comoving space.
     Input points and parameters can be in any units as long as they are consistent.
@@ -577,7 +611,8 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
     transverse_max, los_max: maximum transverse and line-of-sight separation for points to be considered in the same multiplet, in the same units as points_3D. default is 1 for each.
     sim_label (optional): number to keep track of running multiple sims
     periodic_boundary (optional): whether to use periodic boundary conditions. If True, will extend the box by adding copies of the points from each side.
-    
+    n_jobs (int, optional): Number of parallel worker processes for batches, via joblib. Default is 1 (sequential). Set to -1 to use all available cores.
+
     Returns:
     Astropy table with columns:
     'R_bin_min', 'R_bin_max': edges of the transverse separation bins, in the same units as points_3D.
@@ -641,48 +676,42 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
     random.shuffle(indices)
     multiplet_table = multiplet_table[indices]
 
-    # run in n_batches
-    i_end = int(len(multiplet_table)/n_batches)
-    i_start = 0
-    
     results_base_path = save_directory + '/MIA_'+str(len(R_bins))+'bins_'+str(np.min(R_bins))+'_'+str(np.max(R_bins))+'_counts'+str(len(points_3D))+'_sim'+sim_label+'_'+str(n_batches)+'batches_'
     print('Results base path:', results_base_path)
-    pa_rel_binned_all = []
-    pair_counts_all = []
-    for i in range(int(n_batches)):
-        # print progress every 50
-        if i % 50 == 0 and print_info:
-            print('working on batch', i, 'sim:', sim_label)
-        batch_save_path = results_base_path + str(i)+'.npy'
-        
-        if return_pair_counts:
-            pair_counts_save_path = batch_save_path.replace('.npy', '_paircounts.npy')
-                
-        # check if file exists
-        if len(glob.glob(batch_save_path)) > 0:
-            pa_rel_binned = np.load(batch_save_path)
-            pa_rel_binned_all.append(pa_rel_binned)
-            if return_pair_counts:
-                pair_counts = np.load(pair_counts_save_path)
-                pair_counts_all.append(pair_counts)
-            continue
-        
-        group_batch = multiplet_table[i_start:i_end]
-        i_start = i_end
-        i_end += int(len(multiplet_table)/n_batches)
 
-        pa_rel_binned = calculate_rel_ang_cartesian_binAverage(ang_tracers = group_batch['center_loc'], ang_values = group_batch['orientation'], 
-                                                                    loc_tracers = tracer_points, loc_weights=[1]*len(tracer_points), E_ABS = np.asarray([1]*len(group_batch)),
-                                                                    R_bins=R_bins, pimax=pimax_values, return_pair_counts=return_pair_counts) 
-        if return_pair_counts:
-            pa_rel_binned, pair_counts = pa_rel_binned
-            pair_counts_all.append(pair_counts)
-            if save_intermediate:
-                np.save(pair_counts_save_path, pair_counts)
-            
-        pa_rel_binned_all.append(pa_rel_binned)
-        if save_intermediate:
-            np.save(batch_save_path, pa_rel_binned)
+    batch_size = int(len(multiplet_table)/n_batches)
+    batch_specs = []
+    for i in range(int(n_batches)):
+        i_start = i * batch_size
+        i_end = i_start + batch_size
+        group_batch = multiplet_table[i_start:i_end]
+        batch_save_path = results_base_path + str(i)+'.npy'
+        batch_specs.append({
+            'batch_index': i,
+            'center_loc': np.asarray(group_batch['center_loc']),
+            'orientation': np.asarray(group_batch['orientation']),
+            'n': len(group_batch),
+            'batch_save_path': batch_save_path,
+        })
+
+    tracer_points = np.ascontiguousarray(tracer_points)
+
+    if print_info:
+        print('Dispatching', len(batch_specs), 'batches across', n_jobs, 'workers', flush=True)
+
+    from joblib import Parallel, delayed
+    results_list = Parallel(n_jobs=n_jobs, backend='loky')(
+        delayed(_process_one_3D_batch)(
+            spec['batch_index'], spec['center_loc'], spec['orientation'], spec['n'],
+            tracer_points, R_bins, pimax_values, return_pair_counts,
+            save_intermediate, spec['batch_save_path'], print_info, sim_label,
+        )
+        for spec in batch_specs
+    )
+
+    results_list.sort(key=lambda r: r[0])
+    pa_rel_binned_all = [r[1] for r in results_list]
+    pair_counts_all = [r[2] for r in results_list if r[2] is not None]
             
     pa_rel_binned_all = np.asarray(pa_rel_binned_all)
     relAng = np.nanmean(pa_rel_binned_all, axis=0)
