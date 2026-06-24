@@ -676,7 +676,7 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
     random.shuffle(indices)
     multiplet_table = multiplet_table[indices]
 
-    results_base_path = save_directory + '/MIA_'+str(len(R_bins))+'bins_'+str(np.min(R_bins))+'_'+str(np.max(R_bins))+'_counts'+str(len(points_3D))+'_sim'+sim_label+'_'+str(n_batches)+'batches_'
+    results_base_path = save_directory + '/MIA_'+str(len(R_bins))+'bins_'+str(round(np.min(R_bins), 3))+'_'+str(round(np.max(R_bins), 3))+'_counts'+str(len(points_3D))+'_sim'+sim_label+'_'+str(n_batches)+'batches_'
     print('Results base path:', results_base_path)
 
     batch_size = int(len(multiplet_table)/n_batches)
