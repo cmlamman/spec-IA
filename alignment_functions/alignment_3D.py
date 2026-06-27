@@ -10,23 +10,6 @@ Functions for measuring alignment in 3D and also the autocorrelation (orientatio
 '''
 
 
-def get_angle_angle_correlation_fromSky(catalog, indices, use_weights=False, return_sep=False, ellipticity_component_to_use = 1):
-    '''
-    input: 
-        catalog: astropy table with columns 'RA', 'DEC', 'E1', 'E2' and, optionally, 'WEIGHT' if use_weights is True.
-        *** this is designed to measure angle-angle correlations, but the absolute absolute value of ellipticity can be included in the weight to achieve full-shape correlations. ***
-        indices (array of shape NxM): indices pointing to pairs within the catalaog. Structured as N objects with a maximum of M neighbors each.
-        ellipticity_component_to_use (int, 1 or 2): Whether to use the real (E1) or imaginary (E2) component of the ellipticity for angle calculation.
-    output:
-        rel_angs (array of shape P): angle-angle correlation, in array of shape P where P is the number of unique pairs.
-        rel_seps [optional] (array of shape Px2): 2d separation between pairs in r_p, r_par. r_p is the distance projected on the same plane as the provided angles and r_par is the line-of-sight separation.
-    '''
-    
-    # since the array 
-    
-    return None
-
-
 def get_angle_angle_correlation_cartesian(ang_locs_0, ang_values_0, ang_locs_1=None, ang_values_1=None,
                                           weights_0=None, weights_1=None, print_progress=False,
                                           max_rpar=100, max_rp=100, estimator='x+', los_mode='z',

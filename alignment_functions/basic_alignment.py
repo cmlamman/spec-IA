@@ -274,7 +274,7 @@ def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, abs_e=None
 
 # calculate relative angles in seprate regions and returned binned results
 
-def rel_angle_regions(group_info, loc_tracers, tracer_weights=None, n_regions = 100, pimax = 20, max_proj_sep = 30, max_neighbors=100, 
+def rel_angle_regions(group_info, loc_tracers, tracer_weights=None, use_E_ABS=False, n_regions = 100, pimax = 20, max_proj_sep = 30, max_neighbors=100,
                       return_los=False):
     '''
     divide the angle catalog into n_regions by RA and DEC, calculate cos(2*theta) the angles relative to the tracers, and return the results from each region
@@ -323,8 +323,7 @@ def rel_angle_regions(group_info, loc_tracers, tracer_weights=None, n_regions = 
             
             group_square = groups_dec_slice[ra_sorter[n:m]]
             
-            # NEW: pull out E_ABS if present, else use 1
-            if 'E_ABS' in group_square.colnames:
+            if use_E_ABS:
                 abs_e = np.asarray(group_square['E_ABS'])
             else:
                 abs_e = None
