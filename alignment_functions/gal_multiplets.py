@@ -379,8 +379,123 @@ def get_multiplet_alignment(catalog_for_groups, catalog_for_tracers=None, R_bins
     return results
 
 
-def get_multiplet_alignment_randoms(catalog_for_groups, random_catalog_paths, R_bins, pimax=30, cosmology=cosmo, print_progress=False, 
-                        n_sky_regions=100, save_path=None, pair_max_los=6, pair_max_transverse=1, pair_min_transverse=None, early_binning=False, 
+def get_multiplet_autocorr(catalog_for_groups, R_bins=np.logspace(0, 2, 10), pimax=30, cosmology=cosmo, print_progress=False,
+                        n_sky_regions=100, save_path=None, pair_max_los=6, pair_max_transverse=1, pair_min_transverse=None, early_binning=False, keep_intermediate=False,
+                        truez=False, intermediate_save_paths=None, return_pair_counts=False, already_multiplets=False, n_jobs=1):
+    '''
+    Calculate the autocorrelation of galaxy multiplet orientations (the '++' estimator).
+    Measures cos(2*theta_A)*cos(2*theta_B) where theta_A and theta_B are the orientation angles
+    of two multiplets relative to the separation vector between them.
+    Follows the same pipeline as get_multiplet_alignment().
+
+    Parameters:
+    - catalog_for_groups (dict): Catalog used to find groups.
+    - cosmology (Cosmology, optional): Cosmology object defining the cosmological parameters. Default is LambdaCDM(H0=69.6, Om0=0.286, Ode0=0.714).
+    - print_progress (bool, optional): Whether to print progress messages. Default is False.
+    - n_sky_regions (int, optional): Number of sky regions to measure autocorrelation (relative to full catalog).
+        Regions divided so equal number of groups in each. Error on measurement is standard error of these regions. Default is 100.
+    - pimax (float, optional) or (list, length of n_Rbins): Maximum line-of-sight separation for pairs of galaxies in Mpc/h. Default is 30.
+    - R_bins (array): Bin edges for projected separation in Mpc/h.
+    - save_path (str, optional): Path to save the results. If not provided, the results will not be saved.
+    - early_binning: This option will bin the galaxies early on, saving memory. Helpful if running on dense regions (like BGS), but will generally be a bit noisier measurement.
+
+    Returns:
+    results (Table): Table with columns 'R_bin_min', 'R_bin_max', 'relAng_plot', 'relAng_plot_e'.
+    - R_bin_min, R_bin_max: Edges of the transverse separation bins, Mpc/h.
+    - relAang_plot: cos(2*theta_A)*cos(2*theta_B), where theta is the relative angle between multiplet orientation and separation vector, in each bin.
+    - relAng_plot_e: Error on relAang_plot, from standard error of measurements in each sky region.
+    '''
+
+    comoving_points_groups = get_cosmo_points(catalog_for_groups, cosmology=cosmology)
+
+    if print_progress:
+        print('Making group catalog')
+    if already_multiplets:
+        group_catalog = catalog_for_groups
+    else:
+        group_catalog = make_group_catalog(catalog_for_groups, comoving_points = comoving_points_groups, cosmology=cosmology,
+                                           los_max=pair_max_los, transverse_max=pair_max_transverse, transverse_min=pair_min_transverse, truez=truez)
+    print('Number of multiplets found:', len(group_catalog))
+    if print_progress:
+        print('Measuring autocorrelation')
+
+    loc_tracers = np.asarray(group_catalog['center_loc'])
+    tracer_angles = np.asarray(group_catalog['orientation'])
+    tracer_weights = np.ones(len(group_catalog))
+
+    if early_binning:
+        if intermediate_save_paths is None:
+            try:
+                intermediate_save_paths = save_path.split('.fits')[0]
+            except:
+                print('Save path must be provided to use early binning')
+                return None
+
+        rel_angle_regions_binned(group_catalog, loc_tracers = loc_tracers,  tracer_weights = tracer_weights,
+                                                    R_bins=R_bins, n_regions=n_sky_regions, pimax=pimax, keep_as_regions=False, print_progress=print_progress,
+                                                    intermediate_save_paths=intermediate_save_paths, return_pair_counts=return_pair_counts, n_jobs=n_jobs,
+                                                    tracer_angles=tracer_angles)
+        # reading in the calculated results
+        if print_progress:
+            print('Reading in region results')
+        region_paths = glob.glob(intermediate_save_paths + '*.npy')
+        all_pa_rels = np.asarray([np.load(region_path) for region_path in region_paths])
+        relAng = np.nanmean(all_pa_rels, axis=0)
+        relAng_e = np.nanstd(all_pa_rels, axis=0) / np.sqrt(len(all_pa_rels))
+        if return_pair_counts:
+            pair_count_paths = glob.glob(intermediate_save_paths + '*_paircounts.npy')
+            all_pair_counts = np.asarray([np.load(region_path) for region_path in pair_count_paths])
+            n_pairs = np.nansum(all_pair_counts, axis=0)
+        # remove intermediate files
+        if not keep_intermediate:
+            for region_path in region_paths:
+                os.remove(region_path)
+            if return_pair_counts:
+                for region_path in pair_count_paths:
+                    os.remove(region_path)
+
+    else:
+        max_proj_sep = np.max(R_bins)
+        n_Rbins = len(R_bins) - 1
+
+        # if pimax is not a single value...
+        if isinstance(pimax, (int, float)):
+            group_seps, group_paRel, weights = rel_angle_regions(group_catalog, loc_tracers = loc_tracers, tracer_weights = tracer_weights,
+                                                            n_regions=n_sky_regions, pimax=pimax, max_proj_sep=max_proj_sep, return_los=False,
+                                                            tracer_angles=tracer_angles)
+            group_los = None
+            use_sliding_pimax = False
+        else:
+            group_seps, group_paRel, weights, group_los = rel_angle_regions(group_catalog, loc_tracers = loc_tracers, tracer_weights = tracer_weights,
+                                                            n_regions=n_sky_regions, pimax=np.max(pimax), max_proj_sep=max_proj_sep, return_los=True,
+                                                            tracer_angles=tracer_angles)
+            use_sliding_pimax = True
+
+        sep_bins, relAng, relAng_e, pair_counts_binned = bin_region_results(group_seps, group_paRel, all_weights = weights, R_bins=R_bins, use_sliding_pimax=use_sliding_pimax,
+                                                                            los_sep=group_los, return_pair_counts=return_pair_counts)
+
+    results = Table()
+
+    results['R_bin_min'] = R_bins[:-1]
+    results['R_bin_max'] = R_bins[1:]
+    results['relAng_autocorr_plot'] = relAng
+    results['relAng_autocorr_plot_e'] = relAng_e
+    if return_pair_counts:
+        results['pair_counts'] = pair_counts_binned
+    if isinstance(pimax, (int, float)):
+        results['pimax'] = [pimax] * len(R_bins[:-1])
+    else:
+        results['pimax'] = pimax
+
+    if save_path is not None:
+        results.write(save_path, overwrite=True)
+        print('Results saved to ', save_path)
+
+    return results
+
+
+def get_multiplet_alignment_randoms(catalog_for_groups, random_catalog_paths, R_bins, pimax=30, cosmology=cosmo, print_progress=False,
+                        n_sky_regions=100, save_path=None, pair_max_los=6, pair_max_transverse=1, pair_min_transverse=None, early_binning=False,
                         keep_intermediate=False, intermediate_save_paths=None, return_pair_counts=False):
     '''
     Simillar to get_multiplet_alignment, but calculates the alignment of galaxy multiplets within the given catalog relative to multiple random catalogs.

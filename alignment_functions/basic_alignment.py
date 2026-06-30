@@ -210,8 +210,8 @@ def get_rel_es(catalog, indices, data_weights=None, weights=None, rcolor='rw1', 
         elif return_sep==False:
             return e1_re, e2_rel, all_ws, n_pairs
 
-def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, abs_e=None, loc_weights=None, pimax = 20, max_proj_sep = 30, max_neighbors=100, 
-                                return_los=False, print_progress=False, tracer_behind=False, keep_as_angle=True):
+def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, abs_e=None, loc_weights=None, pimax = 20, max_proj_sep = 30, max_neighbors=100,
+                                return_los=False, print_progress=False, tracer_behind=False, keep_as_angle=True, tracer_angles=None):
     '''
     ang and loc tracers are 3d points. ang_values are orientation angles of ang_tracers 
     - pimax (float, optional): Maximum line-of-sight separation for pairs of galaxies in Mpc/h. Default is 30.
@@ -227,10 +227,14 @@ def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, abs_e=None
     loc_tracers = np.vstack((loc_tracers, np.full(len(loc_tracers[0]), np.inf)))
     if loc_weights is not None:
         loc_weights = np.append(loc_weights, 0)
-    
+    if tracer_angles is not None:
+        tracer_angles = np.append(tracer_angles, np.nan)
+
     center_coords = np.repeat(ang_tracers, np.fromiter((len(i) for i in ii), dtype=np.intp, count=len(ii)), axis=0)
     center_angles = np.repeat(ang_values, np.fromiter((len(i) for i in ii), dtype=np.intp, count=len(ii)))
     neighbor_coords = loc_tracers[np.concatenate(ii)]
+    if tracer_angles is not None:
+        neighbor_angles = tracer_angles[np.concatenate(ii)]
     if abs_e is not None:
         center_abs_e = np.repeat(abs_e, np.fromiter((len(i) for i in ii), dtype=np.intp, count=len(ii)))
     
@@ -256,7 +260,11 @@ def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, abs_e=None
     position_angle = get_orientation_angle_cartesian(center_coords, neighbor_coords)
     
     pa_rel = center_angles[pairs_to_keep] - position_angle
-    if abs_e is not None:
+    if tracer_angles is not None:
+        position_angle_reverse = get_orientation_angle_cartesian(neighbor_coords, center_coords)
+        pa_rel_loc = neighbor_angles[pairs_to_keep] - position_angle_reverse
+        pa_rel = np.cos(2 * pa_rel) * np.cos(2 * pa_rel_loc)
+    elif abs_e is not None:
         pa_rel = center_abs_e[pairs_to_keep] * np.cos(2 * np.asarray((pa_rel)))
     elif keep_as_angle == False:
         pa_rel = np.cos(2* np.asarray((pa_rel)))
@@ -275,7 +283,7 @@ def calculate_rel_ang_cartesian(ang_tracers, ang_values, loc_tracers, abs_e=None
 # calculate relative angles in seprate regions and returned binned results
 
 def rel_angle_regions(group_info, loc_tracers, tracer_weights=None, use_E_ABS=False, n_regions = 100, pimax = 20, max_proj_sep = 30, max_neighbors=100,
-                      return_los=False):
+                      return_los=False, tracer_angles=None):
     '''
     divide the angle catalog into n_regions by RA and DEC, calculate cos(2*theta) the angles relative to the tracers, and return the results from each region
     group_info: must contain central carteisan postion, angle, and RA/DEC of groups
@@ -334,19 +342,19 @@ def rel_angle_regions(group_info, loc_tracers, tracer_weights=None, use_E_ABS=Fa
                     loc_tracers, loc_weights=tracer_weights,
                     abs_e=abs_e,                                # NEW
                     pimax=pimax, max_proj_sep=max_proj_sep,
-                    max_neighbors=max_neighbors, return_los=False)
+                    max_neighbors=max_neighbors, return_los=False, tracer_angles=tracer_angles)
             elif return_los==True:
                 proj_dist, pa_rel, weights, los_seps = calculate_rel_ang_cartesian(
                     group_square['center_loc'], group_square['orientation'],
                     loc_tracers, loc_weights=tracer_weights,
                     abs_e=abs_e,                                # NEW
                     pimax=pimax, max_proj_sep=max_proj_sep,
-                    max_neighbors=max_neighbors, return_los=return_los)
+                    max_neighbors=max_neighbors, return_los=return_los, tracer_angles=tracer_angles)
                 all_los_seps.append(los_seps)
             
             all_proj_dists.append(proj_dist)
             
-            if abs_e is not None:
+            if abs_e is not None or tracer_angles is not None:
                 all_pa_rels.append(pa_rel)
             else:
                 all_pa_rels.append(np.cos(2*pa_rel))
@@ -434,7 +442,7 @@ def square_sum(coords):
     coords = np.sum(coords, axis=1)
     return np.sqrt(coords)
 
-def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers, loc_weights, R_bins, pimax, E_ABS, print_progress=False, tracer_behind=False, return_pair_counts=False):
+def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers, loc_weights, R_bins, pimax, E_ABS, print_progress=False, tracer_behind=False, return_pair_counts=False, tracer_angles=None):
     '''
     With especially dense regions, memory becomes an issue as the number of group-tracer matches drastically increse. 
     This function is a memory-sensitive version of calculate_rel_ang_cartesian, which bins the projected distances earlier and runs several functions in batches.
@@ -470,13 +478,17 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
     
     loc_tracers = np.vstack((loc_tracers, np.full(len(loc_tracers[0]), np.inf)))   # adding placeholder row for when neighbor not found
     loc_weights = np.append(loc_weights, 0)
-    
+    if tracer_angles is not None:
+        tracer_angles = np.append(tracer_angles, np.nan)
+
     center_coords = np.repeat(ang_tracers, np.fromiter((len(i) for i in ii), dtype=np.intp, count=len(ii)), axis=0)
     center_angles = np.repeat(ang_values, np.fromiter((len(i) for i in ii), dtype=np.intp, count=len(ii)))
     center_E = np.repeat(E_ABS, np.fromiter((len(i) for i in ii), dtype=np.intp, count=len(ii)))
-    
+
     concat_indices = np.concatenate(ii).astype(int)
     neighbor_weights = loc_weights[concat_indices]
+    if tracer_angles is not None:
+        neighbor_angles = tracer_angles[concat_indices]
     loc_tracers = loc_tracers.T                         # it takes less time to index a 3xN array than a Nx3 array!
     neighbor_coords = loc_tracers[:, concat_indices]
     neighbor_coords = neighbor_coords.T
@@ -551,14 +563,21 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
         # calculate position angle in batches
         n_batches = int(len(c_bin)/100)
         if n_batches==0: n_batches=1
-        position_angle = process_in_batches(lambda x: get_orientation_angle_cartesian(c_bin[x], n_bin[x]), np.arange(len(c_bin)), n_batches) 
-        
-        pa_rel = ca_bin - position_angle
-        # get weighted average from provided weights
-        pa_rel *= 2
-        pa_rel = np.cos(pa_rel)
-        pa_rel *= cE_bin                        # multiplying by absolute value of ellipticity
-        pa_rel *= weight_to_use    
+        position_angle = process_in_batches(lambda x: get_orientation_angle_cartesian(c_bin[x], n_bin[x]), np.arange(len(c_bin)), n_batches)
+
+        if tracer_angles is not None:
+            la_bin = neighbor_angles[i_bin_keep]
+            position_angle_reverse = process_in_batches(lambda x: get_orientation_angle_cartesian(n_bin[x], c_bin[x]), np.arange(len(c_bin)), n_batches)
+            pa_rel0 = ca_bin - position_angle
+            pa_rel1 = la_bin - position_angle_reverse
+            pa_rel = np.cos(2 * pa_rel0) * np.cos(2 * pa_rel1)
+        else:
+            pa_rel = ca_bin - position_angle
+            # get weighted average from provided weights
+            pa_rel *= 2
+            pa_rel = np.cos(pa_rel)
+            pa_rel *= cE_bin                        # multiplying by absolute value of ellipticity
+        pa_rel *= weight_to_use
         weighted_sum = np.nansum(pa_rel)
         weight_sum = np.nansum(weight_to_use)
         weighted_av = weighted_sum / weight_sum
@@ -580,7 +599,7 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
 # inside rel_angle_regions_binned) so that loky's process pool can pickle it.
 def _process_one_binned_region(region_spec, loc_tracers, tracer_weights,
                                 R_bins, pimax, tracer_behind, return_pair_counts,
-                                intermediate_save_paths, print_progress):
+                                intermediate_save_paths, print_progress, tracer_angles=None):
     """Run calculate_rel_ang_cartesian_binAverage for a single sky region.
  
     region_spec is a dict built by the driver; contains the pre-extracted
@@ -615,14 +634,14 @@ def _process_one_binned_region(region_spec, loc_tracers, tracer_weights,
             ang_tracers=center_loc, ang_values=orientation,
             loc_tracers=loc_tracers, loc_weights=tracer_weights, E_ABS=E_ABS,
             R_bins=R_bins, pimax=pimax, print_progress=False,
-            tracer_behind=tracer_behind, return_pair_counts=True,
+            tracer_behind=tracer_behind, return_pair_counts=True, tracer_angles=tracer_angles,
         )
     else:
         pa_rel_binned = calculate_rel_ang_cartesian_binAverage(
             ang_tracers=center_loc, ang_values=orientation,
             loc_tracers=loc_tracers, loc_weights=tracer_weights, E_ABS=E_ABS,
             R_bins=R_bins, pimax=pimax, print_progress=False,
-            tracer_behind=tracer_behind,
+            tracer_behind=tracer_behind, tracer_angles=tracer_angles,
         )
         n_pairs = None
  
@@ -639,8 +658,8 @@ def _process_one_binned_region(region_spec, loc_tracers, tracer_weights,
 
 
 # New function that calculates realtive ellipticities but bins in sep earlier to save memory - also can run on multiple cores
-def rel_angle_regions_binned(orientation_catalog, loc_tracers, tracer_weights, R_bins, use_E_ABS=False, n_regions=100, pimax=30, 
-                             keep_as_regions=False, print_progress=False, intermediate_save_paths=None, tracer_behind=False, return_pair_counts=False, n_jobs=1):
+def rel_angle_regions_binned(orientation_catalog, loc_tracers, tracer_weights, R_bins, use_E_ABS=False, n_regions=100, pimax=30,
+                             keep_as_regions=False, print_progress=False, intermediate_save_paths=None, tracer_behind=False, return_pair_counts=False, n_jobs=1, tracer_angles=None):
     '''
     Divides the orientation catalog into n_regions by RA and DEC, calculate cos(2*theta) the orientations relative to the tracers
     in bins of projected separation on the sky, R_bins. The measurement in each bin is measured relative to the full tracer sample.
@@ -654,6 +673,8 @@ def rel_angle_regions_binned(orientation_catalog, loc_tracers, tracer_weights, R
         array of 3d points corresponding to the tracers
     tracer_weights : array
         weights of the tracers
+    tracer_angles:
+        can be put in for computing autocorrelation
     R_bins : array
         array of bin edges for the projected separaton, in Mpc/h
     use_E_ABS : bool, optional
@@ -751,7 +772,7 @@ def rel_angle_regions_binned(orientation_catalog, loc_tracers, tracer_weights, R
         delayed(_process_one_binned_region)(
             spec, loc_tracers, tracer_weights, R_bins, pimax,
             tracer_behind, return_pair_counts,
-            intermediate_save_paths, print_progress,
+            intermediate_save_paths, print_progress, tracer_angles=tracer_angles,
         )
         for spec in specs
     )

@@ -215,6 +215,64 @@ def precompute_kz_integral(pimax_values, PS_data, directory, PS_min = 1e-4, PS_m
     print('Finished')
     return None
 
+def precompute_kz_integral_II(pimax_values, PS_data, directory, PS_min = 1e-4, PS_max = 2e2, n_samples=100, warning_handling='once', overwrite=True):
+    '''
+    Precompute the kz integral for the II (orientation autocorrelation) model.
+    Same as precompute_kz_integral but with squared tidal projection factor (K²/k²)².
+
+    INPUT:
+    ------------------
+    pimax_values: array of shape (n,). Line-of-sight distance
+    PS_data: dictionary or DataFrame of matter power spectrum values. Must contain columns 'k' and 'P'.
+    directory: string. Directory path to save the spline files.
+    PS_min, PS_max: floats. Range of k to use for the power spectrum [h/Mpc]
+    n_samples: int. Number of samples to use for the spline.
+
+    RETURNS:
+    ------------------
+    None. Saves the spline files in the directory with 'II' prefix.
+    '''
+
+    if overwrite == False:
+        if all([os.path.exists(directory+'/kz_integral_II_NL_spl_pimax_'+str(round(float(pmi), 2))+'.npy') for pmi in pimax_values]):
+            print('All files exist. Skipping')
+            return None
+
+    warnings.filterwarnings(warning_handling)
+
+    tck_PS = interpolate.splrep(np.log10(PS_data['k']), np.log10(PS_data['P']), s=0)
+
+    def get_PS(k):
+        return 10**(interpolate.splev(np.log10(k), tck_PS))
+
+    def kz_integrand(kz, K, pimax):
+        k_squared = kz**2 + K**2
+        sinc_value = scipy.special.sinc( (kz * pimax) / np.pi )
+        return get_PS(np.sqrt(k_squared)) * (K**2 / k_squared)**2 * sinc_value
+
+    Ks_sample_values = np.logspace(np.log10(PS_min), np.log10(PS_max), n_samples)
+
+    n_pi_steps = 1000
+    max_pi = 1e3
+    min_pi = 1e1
+    Ks_extra_values = (np.arange(0, n_pi_steps) * np.pi * max_pi/(3*n_pi_steps)) + float(int(min_pi/np.pi))*np.pi
+    Ks_sample_values = np.sort(np.concatenate((Ks_sample_values, Ks_extra_values)))
+
+    for pmi in pimax_values:
+        kz_integral_values = []
+        for K in Ks_sample_values:
+            kz_integral_values.append(_quad(kz_integrand, a=PS_min, b=PS_max, args=(K, pmi)))
+        tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=0)
+
+        pmi_rounded = round(float(pmi), 2)
+        print('saving II for pimax =', pmi_rounded)
+        with open(directory+'/kz_integral_II_NL_spl_pimax_'+str(pmi_rounded)+'.npy', 'wb') as f:
+            pickle.dump(tck_kz_integral, f)
+
+    print('Finished')
+    return None
+
+
 def precompute_kz_integral_1D_gauss_limber(pimax_values, PS_data, directory, gauss_std, PS_min = 1e-4, PS_max = 2e2, n_samples=100, warning_handling='once', pimax_rp=None, overwrite=True):
     # assume that only the kz=0 contributions matter. Typically only true when r_p << r_par
 
@@ -253,6 +311,31 @@ def precompute_kz_integral_1D_gauss_limber(pimax_values, PS_data, directory, gau
 # CALCULATING FANCY J
 def get_fancyJ(Rmin, Rmax, bigK):
     return (2*scipy.special.j0(Rmin*bigK) + Rmin*bigK*scipy.special.j1(Rmin*bigK) - 2*scipy.special.j0(Rmax*bigK) - Rmax*bigK*scipy.special.j1(Rmax*bigK)) * 2 / (bigK**2 * (Rmax**2 - Rmin**2))
+
+def get_fancyJ_J0(Rmin, Rmax, bigK):
+    return (2 / (Rmax**2 - Rmin**2)) * (1 / bigK) * (Rmax * scipy.special.j1(bigK * Rmax) - Rmin * scipy.special.j1(bigK * Rmin))
+
+# for the autocorrelation function
+def get_fancyJ_J4(Rmin, Rmax, bigK):
+    # binned integral (2/(Rmax^2-Rmin^2)) * \int_{Rmin}^{Rmax} R J4(K R) dR, closed form.
+    # Below K*Rmax = 0.5 the exact Bessel expression below loses precision to 1/K^3
+    # cancellation, so a small-argument series (accurate to ~1e-9 relative error at
+    # the threshold) is used instead.
+    K = bigK
+    if K * Rmax < 0.5:
+        integral = (K**4 * (Rmax**6 - Rmin**6) / 2304
+                    - K**6 * (Rmax**8 - Rmin**8) / 61440
+                    + K**8 * (Rmax**10 - Rmin**10) / 3686400)
+    else:
+        j1_max = scipy.special.j1(K * Rmax)
+        j1_min = scipy.special.j1(K * Rmin)
+        j0_max = scipy.special.j0(K * Rmax)
+        j0_min = scipy.special.j0(K * Rmin)
+        numerator = (K**2 * Rmax * Rmin * (Rmax * j1_max - Rmin * j1_min)
+                     + 8 * K * Rmax * Rmin * (j0_max - j0_min)
+                     + 24 * Rmax * j1_min - 24 * Rmin * j1_max)
+        integral = numerator / (K**3 * Rmax * Rmin)
+    return (2 / (Rmax**2 - Rmin**2)) * integral
 
 
 def compute_rel_e_model(rel_e_measurement, wp_measurement, pimax_values, b_gal, z = 0.8, rel_e_randoms=None,
@@ -434,3 +517,112 @@ def get_rel_e_model(R_bin_min, R_bin_max, pimax_values, wp_values, b_gal, z = 0.
     model_estimates = np.asarray(model_estimates)
     
     return model_estimates*D_norm
+
+
+def compute_auto_model(rel_e_measurement, wp_measurement, z = 0.8, rel_e_randoms=None,
+                 PS_min = 1e-4, PS_max = 2e2, PS_data = abacus_ps_nl, PS_z = 0.8, precomputed_kz_integral_paths = None, warning_handling='once'):
+    '''
+    Compute the II (multiplet-multiplet orientation autocorrelation) model prediction
+    at each bin of projected separation. This code assumes a tau value of 1.
+
+    Differs from compute_rel_e_model (gI cross-correlation) in three ways:
+    1. No galaxy bias — uses P_mm directly (no b_gal factor)
+    2. Squared tidal projection: (K²/k²)² instead of (K²/k²)
+    3. J_0 Bessel projection instead of J_2
+
+    Precomputed kz integral splines must be generated with precompute_kz_integral_II(),
+    which bakes in the squared tidal factor.
+
+    INPUT - REQUIRED:
+    ------------------
+    rel_e_measurement: dictonary or DataFrame of projected relative ellipticity measurement between two shape catalogs.
+        must contain columns 'R_bin_min', 'R_bin_max', 'pimax'.
+    wp: dictonary or DataFrame of projected correlation function.
+        must contain columns 'R_bin_min', 'R_bin_max', 'wp'.
+    z: float. redshift of galaxies used in measurement
+
+    INPUT - OPTIONAL:
+    ------------------
+    rel_e_randoms: dictonary or DataFrame of projected relative ellipticity measurement between a shape catalog and a random catalog.
+        must contain columns 'R_bin_min', 'R_bin_max', 'relAng_plot'.
+    PS_min, PS_max: floats. Range of k to use for the power spectrum [h/Mpc]
+    PS_data: dictonary or DataFrame of matter power spectrum values. Must contain columns 'k' and 'P'. Default is a non-linear matter power spectrum from AbacusSummit.
+    PS_z = float. redshift of the power spectrum. Default is 0.8.
+    precomputed_kz_integral_paths: list of paths to precomputed kz integral splines with (K²/k²)² tidal factor.
+        Must be generated by precompute_kz_integral_II().
+    '''
+    warnings.filterwarnings(warning_handling)
+
+    if precomputed_kz_integral_paths is None:
+        raise ValueError('precomputed_kz_integral_paths is required. Use precompute_kz_integral_II() to generate splines with the squared tidal factor.')
+
+    if rel_e_measurement['R_bin_min'][0] != wp_measurement['R_bin_min'][0]:
+        print('Warning - R bins do not match between rel_e_measurement and wp_measurement!! Continuing with the R bins from rel_e_measurement')
+
+    # if the redshift of the measurement and power spectrum are different, adjust using growth factor
+    D_norm = 1
+    if z != PS_z:
+        D_norm = (D(z) / D(PS_z))**2
+
+
+    # read in the pre-computed value of the kz integral (made with precompute_kz_integral_II)
+    splines = {}
+    for path in precomputed_kz_integral_paths:
+        pmi_str = path.split('_')[-1].split('.npy')[0]
+        pmi_key = round(float(pmi_str), 2)
+        splines[pmi_key] = np.load(path, allow_pickle=True)
+
+    def get_kz_integral_spl(K, pimax):
+        pmi_key = round(float(pimax), 2)
+        if pmi_key not in splines:
+            print('Pimax value not found in pre-computed values. Use precompute_kz_integral_II() to generate first. Continuing with a pimax value of 30.0 Mpc/h')
+            pmi_key = 30.0
+        front_constant = pimax / np.pi
+        return front_constant * (interpolate.splev(np.log10(K), splines[pmi_key]))
+
+    randoms = 0
+    if rel_e_randoms is not None:
+        if rel_e_randoms['R_bin_min'][0] != rel_e_measurement['R_bin_min'][0]:
+            print('Warning - R bins do not match between rel_e_measurement and rel_e_randoms!! Continuing with the R bins from rel_e_measurement')
+        randoms = rel_e_randoms['relAng_plot']
+
+    wp_R_bin_centers = (wp_measurement['R_bin_min']+wp_measurement['R_bin_max'])/2
+    wp_values = wp_measurement['wp']
+
+    def get_wp(R):
+        return np.interp(R, wp_R_bin_centers, wp_values)
+
+    # getting \bar{w_p}, per-bin
+    def wp_integrand(R):
+        return R * get_wp(R)
+
+    def get_bar_wp(Rmin, Rmax):
+        wp_integral = _quad(wp_integrand, a=Rmin, b=Rmax) # integrate over R
+        return (2 / (Rmax**2 - Rmin**2)) * wp_integral
+
+    def K_integrand(K, Rmin, Rmax, pimax):
+        kz_integral = get_kz_integral_spl(K, pimax)
+        fancyJ = (get_fancyJ_J0(Rmin, Rmax, K) + get_fancyJ_J4(Rmin, Rmax, K))
+        return K * fancyJ * kz_integral
+
+    def get_model_est(Rmin, Rmax, pimax, tau=1, PS_min = 10**-4, PS_max = 100):
+        bar_wp = get_bar_wp(Rmin, Rmax)
+        K_integral = _quad_bessel_breaksum(K_integrand, PS_min, PS_max, Rmax=Rmax,
+                                           args=(Rmin, Rmax, pimax))
+        return -tau * K_integral / (2*pimax + bar_wp)
+
+    # computing the model prediction in each bin of projected separation
+    model_estimates = []
+    r_bin_centers = []
+    for rt in rel_e_measurement:
+        try:
+            model_est = get_model_est(rt['R_bin_min'], rt['R_bin_max'], rt['pimax'], tau=1)
+        except ValueError:
+            print('no values found for pimax = ', rt['pimax'])
+            break
+        model_estimates.append(model_est)
+        r_bin_centers.append((rt['R_bin_min']+rt['R_bin_max'])/2)
+    model_estimates = np.asarray(model_estimates)
+    r_bin_centers = np.asarray(r_bin_centers)
+
+    return r_bin_centers, model_estimates*D_norm
