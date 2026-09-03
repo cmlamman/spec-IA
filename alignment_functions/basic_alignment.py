@@ -372,14 +372,14 @@ def rel_angle_regions(group_info, loc_tracers, tracer_weights=None, use_E_ABS=Fa
         return all_proj_dists, all_pa_rels, all_weights, all_los_seps
 
 def sliding_pimax(r_sep):
-    return 6 + (2/3)*r_sep
+    return 8 + (2/3)*r_sep
 
 def bin_region_results(all_proj_dists, all_pa_rels, all_weights=None, R_bins=np.logspace(0, 2, 11), use_sliding_pimax=False, los_sep=None, return_pair_counts=False):
     '''
     bin the results from rel_angle_regions
     all_proj_dists, all_pa_rels: list of arrays of values from each region
     R_bins: bin edges for the projected separation, in Mpc/h
-    if use_sliding_pimax is True, pairs are limited to a pimax of 10 + (2/3)*proj_dists, required los_sep
+    if use_sliding_pimax is True, pairs are limited to a pimax of 8 + (2/3)*proj_dists, required los_sep
     '''
     
     sep_bins = R_bins

@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 import glob
@@ -99,7 +100,7 @@ def D(z, norm_at_z0=False):
 def get_relative_bias(z, wp, D_base, wp_base):
     '''get relative bias of a galaxy sample at z with projected correlation function wp, 
     compared to a sample with growth factor D_base and projected correlation function wp_base.'''
-    return (D_base / D(z)) * (wp/wp_base)**2
+    return (D_base / D(z)) * (wp/wp_base)**.5
        
 
 #####################################################################################################
@@ -362,7 +363,7 @@ def compute_rel_e_model(rel_e_measurement, wp_measurement, pimax_values, b_gal, 
     PS_data: dictonary or DataFrame of matter power spectrum values. Must contain columns 'k' and 'P'. Default is a non-linear matter power spectrum from AbacusSummit.
     PS_z = float. redshift of the power spectrum. Default is 0.8.
     precomputed_kz_integral_paths: list of paths to precomputed values of the kz integral afor given pi values, made with the above power spectum. 
-        Must be formatted as the output of precompute_kz_integrand.
+        Must be formatted as the output of precompute_kz_integral.
     '''
     warnings.filterwarnings(warning_handling)
     
@@ -385,7 +386,7 @@ def compute_rel_e_model(rel_e_measurement, wp_measurement, pimax_values, b_gal, 
     def get_kz_integral_spl(K, pimax, b_gal):
         pmi_key = round(float(pimax), 2)
         if pmi_key not in splines:
-            print('Pimax value not found in pre-computed values. Use precompute_kz_integral() to generate first. Continuing with a pimax value of 30.0 Mpc/h')
+            print('Pimax value of', pmi_key,'not found in pre-computed values. Use precompute_kz_integral() to generate first. Continuing with a pimax value of 30.0 Mpc/h')
             pmi_key = 30.0
         front_constant = b_gal * pimax / np.pi
         return front_constant * (interpolate.splev(np.log10(K), splines[pmi_key]))
@@ -427,7 +428,7 @@ def compute_rel_e_model(rel_e_measurement, wp_measurement, pimax_values, b_gal, 
     r_bin_centers = []
     for rt in rel_e_measurement:
         try:
-            model_est = get_model_est(rt['R_bin_min'], rt['R_bin_max'], rt['pimax'], b_gal=b_gal, tau=1)
+            model_est = get_model_est(rt['R_bin_min'], rt['R_bin_max'], rt['pimax'], b_gal=b_gal, tau=1, PS_max=PS_max)
         except ValueError:
             print('no values found for pimax = ', rt['pimax'])
             break
@@ -575,7 +576,7 @@ def compute_auto_model(rel_e_measurement, wp_measurement, z = 0.8, rel_e_randoms
     def get_kz_integral_spl(K, pimax):
         pmi_key = round(float(pimax), 2)
         if pmi_key not in splines:
-            print('Pimax value not found in pre-computed values. Use precompute_kz_integral_II() to generate first. Continuing with a pimax value of 30.0 Mpc/h')
+            print('Pimax value of', pmi_key ,'not found in pre-computed values. Use precompute_kz_integral_II() to generate first. Continuing with a pimax value of 30.0 Mpc/h')
             pmi_key = 30.0
         front_constant = pimax / np.pi
         return front_constant * (interpolate.splev(np.log10(K), splines[pmi_key]))
@@ -603,7 +604,8 @@ def compute_auto_model(rel_e_measurement, wp_measurement, z = 0.8, rel_e_randoms
     def K_integrand(K, Rmin, Rmax, pimax):
         kz_integral = get_kz_integral_spl(K, pimax)
         fancyJ = (get_fancyJ_J0(Rmin, Rmax, K) + get_fancyJ_J4(Rmin, Rmax, K))
-        return K * fancyJ * kz_integral
+        pair_factor = 2 # because my estimator is cos(2theta1) * cos(2theta2) and I DON'T divide by 2
+        return K * fancyJ * kz_integral * pair_factor
 
     def get_model_est(Rmin, Rmax, pimax, tau=1, PS_min = 10**-4, PS_max = 100):
         bar_wp = get_bar_wp(Rmin, Rmax)

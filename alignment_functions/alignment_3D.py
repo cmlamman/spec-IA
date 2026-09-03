@@ -135,16 +135,32 @@ def get_3D_MIA_from3D_autocorr(points_3D, save_directory,
         print('counts:', [c for c in np.asarray(counts)])
 
     if periodic_boundary:
+        # Build periodic-image "ghost" copies of the MULTIPLET catalog (not the raw points_3D --
+        # multiplet-multiplet pairs are found via `center_loc`/`orientation`, so ghosts must be
+        # built from those) under the 26 non-trivial box-shifts, trimmed to a shell of width
+        # `extend_by` around the box so only ghosts that could plausibly pair with a real multiplet
+        # within max(s_bins) are kept. Passing (original + ghosts) as the second catalog in the
+        # self-correlation below (while keeping only the originals as the first/query catalog)
+        # correctly recovers pairs that wrap across the periodic boundary, in both directions,
+        # without double-counting bulk (non-edge) pairs.
         extend_by = np.max(s_bins)
-        new_orgins = np.array([[i, j, k] for i in [-1, 0, 1] for j in [-1, 0, 1] for k in [-1, 0, 1]]) * np.max(points_3D[:, 0])
-        extended_points = np.array([points_3D + new_orgins[i] for i in range(len(new_orgins))])
-        extended_points = np.concatenate(extended_points, axis=0)
-        i_keep = (extended_points[:, 0] > np.min(points_3D[:, 0])-extend_by) & (extended_points[:, 0] < np.max(points_3D[:, 0])+extend_by)
-        i_keep &= (extended_points[:, 1] > np.min(points_3D[:, 1])-extend_by) & (extended_points[:, 1] < np.max(points_3D[:, 1])+extend_by)
-        i_keep &= (extended_points[:, 2] > np.min(points_3D[:, 2])-extend_by) & (extended_points[:, 2] < np.max(points_3D[:, 2])+extend_by)
-        tracer_points = extended_points[i_keep]
+        box_size = np.max(points_3D[:, 0])
+        centers = np.asarray(multiplet_table['center_loc'])
+        orients = np.asarray(multiplet_table['orientation'])
+        shifts = np.array([[i, j, k] for i in [-1, 0, 1] for j in [-1, 0, 1] for k in [-1, 0, 1]
+                            if not (i == 0 and j == 0 and k == 0)]) * box_size
+        ghost_centers = np.concatenate([centers + shift for shift in shifts], axis=0)
+        ghost_orients = np.tile(orients, len(shifts))
+        i_keep = (ghost_centers[:, 0] > np.min(points_3D[:, 0]) - extend_by) & (ghost_centers[:, 0] < np.max(points_3D[:, 0]) + extend_by)
+        i_keep &= (ghost_centers[:, 1] > np.min(points_3D[:, 1]) - extend_by) & (ghost_centers[:, 1] < np.max(points_3D[:, 1]) + extend_by)
+        i_keep &= (ghost_centers[:, 2] > np.min(points_3D[:, 2]) - extend_by) & (ghost_centers[:, 2] < np.max(points_3D[:, 2]) + extend_by)
+        ghost_centers = ghost_centers[i_keep]
+        ghost_orients = ghost_orients[i_keep]
+        tracer_locs = np.concatenate([centers, ghost_centers], axis=0)
+        tracer_orients = np.concatenate([orients, ghost_orients])
     else:
-        tracer_points = points_3D
+        tracer_locs = None
+        tracer_orients = None
 
     random.seed(42)
     indices = np.asarray(range(len(multiplet_table)))
@@ -170,6 +186,7 @@ def get_3D_MIA_from3D_autocorr(points_3D, save_directory,
 
         pa_rel_unbinned, separations_unbinned, weights0, weights1 = get_angle_angle_correlation_cartesian(
             group_batch['center_loc'], group_batch['orientation'],
+            ang_locs_1=tracer_locs, ang_values_1=tracer_orients,
             print_progress=print_info, max_rpar=np.max(s_bins), max_rp=np.max(s_bins),
             estimator=estimator, los_mode=los_mode, los_location=los_location)
 

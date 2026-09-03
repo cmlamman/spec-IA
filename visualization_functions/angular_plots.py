@@ -109,6 +109,27 @@ def plot_MIA_mu_bins(result_paths, estimator, paths_to_subtract = None, title=No
         # averaging in s to get mu dependence
         mean1d_mu = np.nanmean(mean2d, axis=0)
         stderr1d_mu = np.nanmean(stderr2d, axis=0)
+
+        # Antisymmetric ("odd-in-mu") fold: 0.5*(f(mu) - f(-mu)). This is the physically
+        # correct statistic for parity-odd estimators like 'x+', whose theoretical prediction
+        # (e.g. Eq. 20, proportional to cos(phi) times an even function of cos(phi)) is an ODD
+        # function of mu by construction. A plain mean over the full (symmetric) mu range -- or
+        # over |mu|<0.9 -- necessarily cancels any such antisymmetric signal to ~0 regardless of
+        # its true amplitude, so it cannot be used as evidence for or against a detection here.
+        # (The mu_sym fold below computes the EVEN part, 0.5*(f(mu)+f(-mu)), which is the correct
+        # denoising operation for parity-even estimators like '++'/'g+', but would likewise erase
+        # a genuine antisymmetric x+ signal -- do not apply mu_sym=True when assessing x+.)
+        mean1d_mu_flipped_odd = mean1d_mu[::-1]
+        stderr1d_mu_flipped_odd = stderr1d_mu[::-1]
+        odd_part = 0.5 * (mean1d_mu - mean1d_mu_flipped_odd)
+        odd_err = 0.5 * np.sqrt(stderr1d_mu**2 + stderr1d_mu_flipped_odd**2)
+        odd_pos_mask = mu_bin_middles > 0
+        odd_mean = np.nanmean(odd_part[odd_pos_mask])
+        odd_mean_err = np.sqrt(np.nansum(odd_err[odd_pos_mask]**2)) / np.sum(odd_pos_mask & ~np.isnan(odd_part))
+        print(f'Odd-part (antisymmetric-in-mu) mean MIA_{estimator}: {odd_mean:.2e} ± {odd_mean_err:.0e}'
+              f'  [this is the statistic relevant for parity-odd estimators like x+; the "Overall mean" '
+              f'and "|mu|<0.9" statistics below are only meaningful for parity-even estimators]')
+
         if mu_sym:
             # average over mu and -mu
             mean1d_mu_flipped = mean1d_mu[::-1]
@@ -126,6 +147,10 @@ def plot_MIA_mu_bins(result_paths, estimator, paths_to_subtract = None, title=No
         # draw thin grey line at y=0
         plt.axhline(0, color='grey', linestyle='--');
         # find the average and error of the mean over all mu bins
+        # NOTE: these full-range (symmetric-in-mu) means are only meaningful for parity-EVEN
+        # estimators (e.g. '++', 'g+'). For a parity-ODD estimator like 'x+', a genuine signal is
+        # antisymmetric in mu and will average to ~0 here regardless of amplitude -- use the
+        # odd-part statistic printed above instead.
         overall_mean = np.nanmean(mean1d_mu)
         overall_stderr = np.nanmean(stderr1d_mu)
         # print out
