@@ -7,6 +7,7 @@ from astropy.cosmology import LambdaCDM, z_at_value
 from alignment_functions.basic_alignment import *
 from geometry_functions.coordinate_functions import get_proj_dist
 import random
+import warnings
 
 
 H0 = 69.6
@@ -64,17 +65,18 @@ def find_components(line_iterator, max_size):
     return list(result.values())
 
 def find_groups_UnionFind(points, max_n=10, transverse_max=0.5, los_max=6, transverse_min=None,
-                          poo=np.asarray([0, 0, 0]), los_mode='radial'):
+                          los_location=None, los_mode='radial', los_axis=None):
     '''
     Find groups of nearby points using a Union-Find on pairs within a transverse/LOS distance cut.
+    Pair separations are split into transverse and LOS parts by los_pair_separations().
 
-    los_mode: 'radial' (default; LOS = radial vector from `poo` to each pair midpoint) or
-              'z' (plane-parallel LOS along +z, appropriate for cubic simulation boxes).
-              Note: the original docstring claimed z-axis LOS but the code actually used radial;
-              pass los_mode='z' explicitly for plane-parallel behavior.
-    poo: observer location (used only when los_mode='radial').
+    los_mode, los_location, los_axis: line of sight, see resolve_los() in coordinate_functions.
+        'radial' (default; LOS from the observer at los_location, default the origin) or
+        'axis' (LOS along los_axis = 'x', 'y' or 'z'; los_mode='z' is shorthand for los_axis='z').
+    points is not modified.
     '''
-    points -= poo  # shift points to observer at origin (no-op for default poo)
+    los = resolve_los(los_mode, los_location, los_axis)
+    points = np.asarray(points)
 
     tree = cKDTree(points)
     max_pair_sep = np.sqrt(transverse_max**2 + los_max**2)
@@ -82,17 +84,9 @@ def find_groups_UnionFind(points, max_n=10, transverse_max=0.5, los_max=6, trans
 
     ii = ii[ii[:, 1] < len(points)]
 
-    if los_mode == 'z':
-        # plane-parallel LOS along +z
-        transverse_seps = np.abs(get_proj_dist(points[ii[:, 1]], points[ii[:, 0]], los_mode='z'))
-        los_seps = np.abs(points[ii[:, 1], 2] - points[ii[:, 0], 2])
-    elif los_mode == 'radial':
-        # radial LOS from origin (note: points have already been shifted so observer is at origin)
-        transverse_seps = np.abs(get_proj_dist(points[ii[:, 1]], points[ii[:, 0]], los_mode='radial'))
-        los_dist = np.sqrt(np.sum(points**2, axis=1))
-        los_seps = np.abs(los_dist[ii[:, 1]] - los_dist[ii[:, 0]])
-    else:
-        raise ValueError("los_mode must be 'radial' or 'z'")
+    transverse_seps, los_seps = los_pair_separations(points[ii[:, 1]], points[ii[:, 0]], **los)
+    transverse_seps = np.abs(transverse_seps)
+    los_seps = np.abs(los_seps)
 
     to_remove = (transverse_seps > transverse_max) | (los_seps > los_max)
     if transverse_min is not None:
@@ -138,37 +132,22 @@ def get_isolated_groups(points, group_result, group_transverseSep_min=10, group_
 ###############################################
 
 
-def calculate_2D_group_orientation(points_3d, los_location=np.asarray([0, 0, 0]), los_mode='radial'):
+def calculate_2D_group_orientation(points_3d, los_location=None, los_mode='radial', los_axis=None):
     '''
-    Calculate the orientation of a group of points in the sky plane perpendicular to the LOS.
-    Member positions are measured relative to the multiplet centroid before projection, so the
-    result reflects the multiplet's intrinsic shape rather than its bulk position on the sky.
+    Calculate the orientation of a group of points in the sky plane perpendicular to the LOS at the
+    group centroid. Member positions are measured relative to the multiplet centroid before projection,
+    so the result reflects the multiplet's intrinsic shape rather than its bulk position on the sky.
 
     points_3d: array of shape (n_points, 3)
-    los_location: 3D observer location (used only when los_mode='radial')
-    los_mode: 'radial' (default; LOS points from los_location to centroid) or 'z' (plane-parallel
-              LOS along +z, appropriate for a cubic simulation box with distant-observer assumption).
-    returns: orientation angle in radians, measured E of N.
+    los_mode, los_location, los_axis: line of sight, see resolve_los() in coordinate_functions.
+        'radial' (default; LOS from the observer at los_location, default the origin, to the centroid) or
+        'axis' (LOS along los_axis = 'x', 'y' or 'z'; los_mode='z' is shorthand for los_axis='z').
+    returns: orientation angle in radians, measured E of N (sky-plane axes from sky_components()).
     '''
     center = np.mean(points_3d, axis=0)
     offsets_3d = points_3d - center
 
-    if los_mode == 'z':
-        # plane-parallel LOS along +z: sky plane is xy, North = +y, East = +x
-        points_2d_x = offsets_3d[:, 0]
-        points_2d_y = offsets_3d[:, 1]
-    elif los_mode == 'radial':
-        los_vec = center - los_location
-        n_hat = los_vec / np.linalg.norm(los_vec)
-        z_axis = np.array([0.0, 0.0, 1.0])
-        plane_y = z_axis - np.dot(z_axis, n_hat) * n_hat
-        plane_y /= np.linalg.norm(plane_y)
-        plane_x = np.cross(plane_y, n_hat)
-        plane_x /= np.linalg.norm(plane_x)
-        points_2d_x = offsets_3d @ plane_x
-        points_2d_y = offsets_3d @ plane_y
-    else:
-        raise ValueError("los_mode must be 'radial' or 'z'")
+    points_2d_x, points_2d_y = sky_components(offsets_3d, center, los_mode, los_location, los_axis)
 
     points_2d = np.column_stack([points_2d_x, points_2d_y])
     r = np.linalg.norm(points_2d, axis=1)
@@ -213,26 +192,27 @@ def trim_groups(points, group_indices, transverse_max, los_max):
 
 def make_group_catalog(data_catalog, comoving_points=None, transverse_max=1, los_max=6,
                        max_n=100, cosmology=cosmo, transverse_min=None, truez=False,
-                       use_sky_coords=True, los_location=np.asarray([0, 0, 0]), los_mode='radial'):
+                       use_sky_coords=True, los_location=None, los_mode='radial', los_axis=None):
     '''
     Find pairs of galaxies, group them, and return a catalog of group properties.
 
-    los_location: observer location used by calculate_2D_group_orientation in 'radial' mode.
-    los_mode: 'radial' (default; LOS points from los_location to each multiplet centroid) or
-              'z' (plane-parallel LOS along +z, appropriate for cubic simulation boxes).
+    los_mode, los_location, los_axis: line of sight, used both to find the multiplets and to project
+        their shapes; see resolve_los() in coordinate_functions.
+        'radial' (default; LOS from the observer at los_location, default the origin, to each multiplet) or
+        'axis' (LOS along los_axis = 'x', 'y' or 'z'; los_mode='z' is shorthand for los_axis='z').
 
     Returns
     -------
     group_table: astropy table with columns 'center_loc', 'orientation', 'n_group',
     'max_dist_to_center', and (if use_sky_coords) 'RA', 'DEC', 'Z'.
     '''
+    los = resolve_los(los_mode, los_location, los_axis)
     if comoving_points is None:
         comoving_points = get_cosmo_points(data_catalog, cosmology=cosmology)
 
     group_indices = find_groups_UnionFind(comoving_points, max_n=max_n,
                                           transverse_max=transverse_max, los_max=los_max,
-                                          transverse_min=transverse_min,
-                                          poo=los_location, los_mode=los_mode)
+                                          transverse_min=transverse_min, **los)
 
     if truez:
         comoving_points = get_cosmo_points(data_catalog, cosmology=cosmology, truez=truez)
@@ -240,8 +220,7 @@ def make_group_catalog(data_catalog, comoving_points=None, transverse_max=1, los
     group_table = Table()
     group_table['center_loc'] = [np.mean(comoving_points[cl], axis=0) for cl in group_indices]
     group_table['orientation'] = [
-        calculate_2D_group_orientation(comoving_points[cl],
-                                       los_location=los_location, los_mode=los_mode)
+        calculate_2D_group_orientation(comoving_points[cl], **los)
         for cl in group_indices
     ]
     group_table['n_group'] = [len(cl) for cl in group_indices]
@@ -680,7 +659,8 @@ def get_group_2pt_projected_corr(catalog, random_paths, catalog2=None, tracer_ca
 
 def _process_one_3D_batch(batch_index, group_batch_center_loc, group_batch_orientation, group_batch_n,
                           tracer_points, R_bins, pimax_values, return_pair_counts,
-                          save_intermediate, batch_save_path, print_info, sim_label):
+                          save_intermediate, batch_save_path, print_info, sim_label, los):
+    # los: canonical LOS dict from resolve_los(); must be the one used to build the multiplet orientations
     if batch_index % 50 == 0 and print_info:
         print('working on batch', batch_index, 'sim:', sim_label, flush=True)
 
@@ -697,7 +677,7 @@ def _process_one_3D_batch(batch_index, group_batch_center_loc, group_batch_orien
         ang_tracers=group_batch_center_loc, ang_values=group_batch_orientation,
         loc_tracers=tracer_points, loc_weights=[1]*len(tracer_points),
         E_ABS=np.ones(group_batch_n),
-        R_bins=R_bins, pimax=pimax_values, return_pair_counts=return_pair_counts)
+        R_bins=R_bins, pimax=pimax_values, return_pair_counts=return_pair_counts, **los)
 
     pair_counts = None
     if return_pair_counts:
@@ -714,19 +694,29 @@ def _process_one_3D_batch(batch_index, group_batch_center_loc, group_batch_orien
 
 def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), np.log10(100), 16), pimax='variable', transverse_max = 1, los_max=1, print_info=True, sim_label='example',
                    periodic_boundary=False, n_batches = 10, save_intermediate=False, save_info=False,
-                   return_pair_counts=False, n_jobs=1):
+                   return_pair_counts=False, n_jobs=1, los_mode=None, los_location=None, los_axis=None, box_size=None):
     '''
     A high-level function to calculate projected multiplet alignment for a set of points in 3D comoving space.
     Input points and parameters can be in any units as long as they are consistent.
+
+    The line of sight (LOS) must be given explicitly. The same LOS is used to find the multiplets, project
+    their shapes, and measure projected separations, LOS separations and position angles of the tracers:
+      los_mode='axis', los_axis='x', 'y' or 'z':   every LOS is parallel to that axis (e.g. RSD applied along that axis).
+      los_mode='radial', los_location=[x, y, z]:  every LOS points from the observer at los_location to the object
+                                                  (e.g. RSD applied radially from that observer). los_location is in the
+                                                  same coordinates as points_3D. Avoid an observer along +/-z of the
+                                                  points (see get_orientation_angle_cartesian).
     -----------
-    points_3D: x, y, z positions of points. type: array of shape (n_points, 3)
+    points_3D: x, y, z positions of points. type: array of shape (n_points, 3). Not modified.
     R_bins: bin edges of the transverse separation for the final measurement
     pimax: maximum line-of-sight separation for pairs of galaxies in Mpc/h. Can be a single value or an array of the same length as R_bins-1 for variable pimax. 
             default is 'variable', which uses pimax = 8 + (2/3)*R_bin_middles. From https://arxiv.org/pdf/2504.16076
     transverse_max, los_max: maximum transverse and line-of-sight separation for points to be considered in the same multiplet, in the same units as points_3D. default is 1 for each.
     sim_label (optional): number to keep track of running multiple sims
     periodic_boundary (optional): whether to use periodic boundary conditions. If True, will extend the box by adding copies of the points from each side.
+    box_size (optional): side length(s) of the periodic box, scalar or length 3. Default is the extent of points_3D along each axis.
     n_jobs (int, optional): Number of parallel worker processes for batches, via joblib. Default is 1 (sequential). Set to -1 to use all available cores.
+    los_mode, los_location, los_axis: line of sight, see above (and resolve_los() in coordinate_functions).
 
     Returns:
     Astropy table with columns:
@@ -734,16 +724,47 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
     'pimax': the pimax used for each bin, in the same units as points_3D.
     'relAng_plot', 'relAng_plot_e': measured alignment signal and error in each bin.
     'pair_counts' (if return_pair_counts): number of pairs in each bin, if return_pair_counts is True.
+    The LOS is recorded in the table header (LOSMODE, and LOSAXIS or LOSOBSX/Y/Z) and in the saved file names.
     '''
-    
+    # validate the LOS once; `los` is then passed unchanged to every LOS-dependent step
+    if los_mode is None:
+        raise ValueError("Choose a line of sight: los_mode='axis' with los_axis='x', 'y' or 'z', or "
+                         "los_mode='radial' with los_location=[x, y, z] (the observer, in the coordinates of points_3D). "
+                         "Earlier versions used a radial LOS from the minimum corner of the box, "
+                         "i.e. los_mode='radial', los_location=np.min(points_3D, axis=0).")
+    los = resolve_los(los_mode, los_location, los_axis)
+    if los['los_mode'] == 'radial' and los_location is None:
+        raise ValueError("los_mode='radial' needs los_location (the observer position)")
+    if los['los_mode'] == 'axis' and los_location is not None:
+        raise ValueError("los_location is only used with los_mode='radial'; set the axis with los_axis")
+    if los['los_mode'] == 'axis':
+        los_tag = 'los' + 'xyz'[los['los_axis']]
+    else:
+        los_tag = 'losradial' + '_'.join('%g' % v for v in los['los_location'])
+
+    R_bin_middles = (R_bins[1:] + R_bins[:-1])/2
+    if isinstance(pimax, str):
+        if pimax != 'variable':
+            raise ValueError("pimax must be 'variable', a number, or an array of length len(R_bins)-1")
+        pimax_values = 8 + (2/3)*R_bin_middles
+    elif np.ndim(pimax) == 0:
+        pimax_values = float(pimax)
+    else:
+        pimax_values = np.asarray(pimax, dtype=float)
+        if pimax_values.shape != R_bin_middles.shape:
+            raise ValueError("pimax must be 'variable', a number, or an array of length len(R_bins)-1")
+
+    points_3D = np.asarray(points_3D)
+
     if print_info:
-        print('Calculating MIA for %d points' % len(points_3D))
+        print('Calculating MIA for %d points' % len(points_3D), 'with LOS', los_tag)
         
     if print_info:
         print('Finding multiplets')
     
-    points_3D -= np.min(points_3D, axis=0) # ensure that the simulation corner is at 0,0,0
-    multiplet_table = make_group_catalog(None, comoving_points=points_3D, transverse_max=transverse_max, los_max=los_max, max_n=100, use_sky_coords=False)
+    multiplet_table = make_group_catalog(None, comoving_points=points_3D, transverse_max=transverse_max, los_max=los_max, max_n=100, use_sky_coords=False, **los)
+    if len(multiplet_table) < n_batches:
+        raise ValueError('Found %d multiplets, fewer than n_batches=%d' % (len(multiplet_table), n_batches))
     if print_info:
         print('Found %d multiplets' % len(multiplet_table), 'averange number of members: %f' % np.mean(multiplet_table['n_group']))  
     # print binned counts of multiplet sizes
@@ -765,24 +786,31 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
                 f.write('Size: %d, Count: %d\n' % (u, c))
 
     if periodic_boundary:
+        if los['los_mode'] == 'radial':
+            warnings.warn("periodic_boundary with a radial LOS: the periodic copies keep the RSD of the original points, "
+                          "which was applied along the original points' LOS, not along the copies' LOS.")
+        box_min = np.min(points_3D, axis=0)
+        box_max = np.max(points_3D, axis=0)
+        if box_size is None:
+            box_size = box_max - box_min
+            if print_info:
+                print('Using box_size =', box_size)
+        box_size = np.broadcast_to(np.asarray(box_size, dtype=float), (3,))
         # make an array with every comination of adding or subtracting the box size to each dimmension
-            
-        extend_by = np.max(R_bins)
-        new_orgins = np.array([[i, j, k] for i in [-1, 0, 1] for j in [-1, 0, 1] for k in [-1, 0, 1]]) * np.max(points_3D[:,0])  # assumes box is a cube with one corner at 0,0,0
-        extended_points = np.array([points_3D + new_orgins[i] for i in range(len(new_orgins))])
-        extended_points = np.concatenate(extended_points, axis=0)
+        new_orgins = np.array([[i, j, k] for i in [-1, 0, 1] for j in [-1, 0, 1] for k in [-1, 0, 1]]) * box_size
+        extended_points = np.concatenate([points_3D + new_orgin for new_orgin in new_orgins], axis=0)
 
-        # trim to points within some distance of origional box
-        i_keep = (extended_points[:,0] > np.min(points_3D[:,0])-extend_by) & (extended_points[:,0] < np.max(points_3D[:,0])+extend_by) 
-        i_keep &= (extended_points[:,1] > np.min(points_3D[:,1])-extend_by) & (extended_points[:,1] < np.max(points_3D[:,1])+extend_by)
-        i_keep &= (extended_points[:,2] > np.min(points_3D[:,2])-extend_by) & (extended_points[:,2] < np.max(points_3D[:,2])+extend_by)
+        # trim to points that can pair with a point in the original box: within max(R_bins) transverse and
+        # max(pimax) along the LOS (along the LOS axis for 'axis'; in every direction for 'radial')
+        if los['los_mode'] == 'axis':
+            extend_by = np.full(3, np.max(R_bins))
+            extend_by[los['los_axis']] = np.max(pimax_values)
+        else:
+            extend_by = np.full(3, np.sqrt(np.max(R_bins)**2 + np.max(pimax_values)**2))
+        i_keep = np.all((extended_points > box_min - extend_by) & (extended_points < box_max + extend_by), axis=1)
         tracer_points = extended_points[i_keep]
     else:
         tracer_points = points_3D
-    
-    R_bin_middles = (R_bins[1:] + R_bins[:-1])/2
-    if pimax == 'variable':
-        pimax_values = 8 + (2/3)*R_bin_middles 
 
 
     # order group table randomly (but reproducibly)
@@ -791,7 +819,7 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
     random.shuffle(indices)
     multiplet_table = multiplet_table[indices]
 
-    results_base_path = save_directory + '/MIA_'+str(len(R_bins))+'bins_'+str(round(np.min(R_bins), 3))+'_'+str(round(np.max(R_bins), 3))+'_counts'+str(len(points_3D))+'_sim'+sim_label+'_'+str(n_batches)+'batches_'
+    results_base_path = save_directory + '/MIA_'+str(len(R_bins))+'bins_'+str(round(np.min(R_bins), 3))+'_'+str(round(np.max(R_bins), 3))+'_counts'+str(len(points_3D))+'_sim'+sim_label+'_'+los_tag+'_'+str(n_batches)+'batches_'
     print('Results base path:', results_base_path)
 
     batch_size = int(len(multiplet_table)/n_batches)
@@ -819,7 +847,7 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
         delayed(_process_one_3D_batch)(
             spec['batch_index'], spec['center_loc'], spec['orientation'], spec['n'],
             tracer_points, R_bins, pimax_values, return_pair_counts,
-            save_intermediate, spec['batch_save_path'], print_info, sim_label,
+            save_intermediate, spec['batch_save_path'], print_info, sim_label, los,
         )
         for spec in batch_specs
     )
@@ -848,6 +876,12 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
         
     if return_pair_counts:
         results['pair_counts'] = pair_counts_binned
+
+    results.meta['LOSMODE'] = los['los_mode']
+    if los['los_mode'] == 'axis':
+        results.meta['LOSAXIS'] = 'xyz'[los['los_axis']]
+    else:
+        results.meta['LOSOBSX'], results.meta['LOSOBSY'], results.meta['LOSOBSZ'] = [float(v) for v in los['los_location']]
 
     save_path = results_base_path+'.fits'
     if save_path is not None:

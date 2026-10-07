@@ -431,6 +431,8 @@ def bin_region_results(all_proj_dists, all_pa_rels, all_weights=None, R_bins=np.
 ################################################################
 
 def process_in_batches(func, array, batch_size):
+    if len(array) == 0:
+        return func(array)   # empty input: keep func's output type/shape instead of failing in np.concatenate
     result = []
     for i in range(0, len(array), batch_size):
         batch = array[i:i+batch_size]
@@ -442,7 +444,8 @@ def square_sum(coords):
     coords = np.sum(coords, axis=1)
     return np.sqrt(coords)
 
-def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers, loc_weights, R_bins, pimax, E_ABS, print_progress=False, tracer_behind=False, return_pair_counts=False, tracer_angles=None):
+def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers, loc_weights, R_bins, pimax, E_ABS, print_progress=False, tracer_behind=False, return_pair_counts=False, tracer_angles=None,
+                                           los_mode='radial', los_location=None, los_axis=None):
     '''
     With especially dense regions, memory becomes an issue as the number of group-tracer matches drastically increse. 
     This function is a memory-sensitive version of calculate_rel_ang_cartesian, which bins the projected distances earlier and runs several functions in batches.
@@ -465,8 +468,17 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
     pimax : float or array
         Maximum line-of-sight separation for pairs of galaxies in Mpc/h. Default is 30.
         Can also be array of size (R_bins-1) to use a different pimax for each R bin
+    tracer_behind : bool
+        If True, only keep pairs where the loc tracer is farther from the observer than the angle tracer
+        (for los_mode='axis', farther along +los_axis).
+    los_mode, los_location, los_axis :
+        Line of sight, see resolve_los() in coordinate_functions. Default is radial with the observer at the origin.
+        Must be the LOS used to measure ang_values (e.g. in make_group_catalog). Projected and LOS separations
+        come from los_pair_separations(); position angles are measured in the sky plane at the pair midpoint
+        (get_orientation_angle_cartesian).
 
     '''
+    los = resolve_los(los_mode, los_location, los_axis)
     if print_progress: print('making tree')
     # make tree
     tree = cKDTree(loc_tracers)
@@ -494,18 +506,14 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
     neighbor_coords = neighbor_coords.T
     loc_tracers = loc_tracers.T
     
-    if print_progress: print('calculating distances')
-    
-    # breaking it up to save memory
-    dist_to_orgin_loc = process_in_batches(lambda x: square_sum(neighbor_coords[x]), np.arange(len(center_coords)), 100000)
-    dist_to_orgin_ang = process_in_batches(lambda x: square_sum(center_coords[x]), np.arange(len(center_coords)), 100000)
-    
     if print_progress: print('calculating separations')
-    dist_to_orgin_loc -= dist_to_orgin_ang
-    los_sep = np.abs(dist_to_orgin_loc)
-    if print_progress: print('calculating proj dist in batches')
-    proj_dist = process_in_batches(lambda x: get_proj_dist(center_coords[x], neighbor_coords[x]), np.arange(len(center_coords)), 100000)
-    proj_dist = np.abs(proj_dist)
+
+    # breaking it up to save memory
+    separations = process_in_batches(lambda x: np.column_stack(los_pair_separations(center_coords[x], neighbor_coords[x], **los)),
+                                     np.arange(len(center_coords)), 100000)
+    proj_dist = np.abs(separations[:, 0])
+    los_sep_signed = separations[:, 1]          # > 0 when the loc tracer is farther from the observer
+    los_sep = np.abs(los_sep_signed)
     
     if print_progress: print('binning')
     # bin the projected distances in the provided R bins.
@@ -529,7 +537,7 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
     
     if tracer_behind==True:
         # only keeping pairs where the tracer is behind the shape, to avoid lensing effects
-        i_keep &= (dist_to_orgin_loc>0)
+        i_keep &= (los_sep_signed>0)
     
     if print_progress: print('calculating relative angles in each R_bin')
     rel_angles = []
@@ -563,11 +571,11 @@ def calculate_rel_ang_cartesian_binAverage(ang_tracers, ang_values, loc_tracers,
         # calculate position angle in batches
         n_batches = int(len(c_bin)/100)
         if n_batches==0: n_batches=1
-        position_angle = process_in_batches(lambda x: get_orientation_angle_cartesian(c_bin[x], n_bin[x]), np.arange(len(c_bin)), n_batches)
+        position_angle = process_in_batches(lambda x: get_orientation_angle_cartesian(c_bin[x], n_bin[x], **los), np.arange(len(c_bin)), n_batches)
 
         if tracer_angles is not None:
             la_bin = neighbor_angles[i_bin_keep]
-            position_angle_reverse = process_in_batches(lambda x: get_orientation_angle_cartesian(n_bin[x], c_bin[x]), np.arange(len(c_bin)), n_batches)
+            position_angle_reverse = process_in_batches(lambda x: get_orientation_angle_cartesian(n_bin[x], c_bin[x], **los), np.arange(len(c_bin)), n_batches)
             pa_rel0 = ca_bin - position_angle
             pa_rel1 = la_bin - position_angle_reverse
             pa_rel = np.cos(2 * pa_rel0) * np.cos(2 * pa_rel1)

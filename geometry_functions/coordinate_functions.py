@@ -150,8 +150,123 @@ def get_cosmo_psep_pa(ra1, dec1, ra2, dec2, z1, z2, u_coords='deg'):
     return psep, pa
 
 
-def get_proj_dist(pos1, pos2, pos_obs=np.asarray([0, 0, 0]) * .7, use_cat=False, los_mode='radial'):
-    '''Return transverse projected distance of two positions. Returns in same units as given.'''
+############
+# LINE OF SIGHT (LOS)
+############
+# Every LOS-dependent step (finding multiplets, projecting their shapes, pair separations and
+# position angles) goes through the functions below, so one set of LOS arguments
+# (los_mode, los_location, los_axis) defines the projection everywhere:
+#   los_mode='radial': the LOS of each object points from the observer at los_location to the object.
+#   los_mode='axis':   every LOS is parallel to the coordinate axis los_axis ('x', 'y' or 'z'),
+#                      with the observer at -infinity along that axis.
+
+_LOS_AXES = {'x': 0, 'y': 1, 'z': 2}
+
+def _axis_index(los_axis):
+    if isinstance(los_axis, str) and los_axis.lower() in _LOS_AXES:
+        return _LOS_AXES[los_axis.lower()]
+    if isinstance(los_axis, (int, np.integer)) and not isinstance(los_axis, bool) and 0 <= los_axis <= 2:
+        return int(los_axis)
+    raise ValueError("los_axis must be 'x', 'y' or 'z' (or 0, 1, 2), got %r" % (los_axis,))
+
+def resolve_los(los_mode='radial', los_location=None, los_axis=None):
+    '''
+    Validate line-of-sight (LOS) arguments and return them in canonical form, as a dict that can be
+    passed on to any LOS-aware function with **los.
+
+    los_mode: 'radial' (LOS from the observer at los_location to each object) or
+              'axis' (LOS parallel to the coordinate axis los_axis).
+              'x', 'y' or 'z' are shorthand for los_mode='axis' with that los_axis.
+    los_location: observer position, shape (3,). Used for 'radial' (default: the origin); ignored for 'axis'.
+    los_axis: 'x', 'y' or 'z' (or 0, 1, 2). Required for 'axis'; an error for 'radial'.
+
+    returns: {'los_mode': 'radial', 'los_location': float array (3,), 'los_axis': None} or
+             {'los_mode': 'axis', 'los_location': None, 'los_axis': 0, 1 or 2}
+    '''
+    if isinstance(los_mode, str) and los_mode in _LOS_AXES:
+        if los_axis is not None and _axis_index(los_axis) != _LOS_AXES[los_mode]:
+            raise ValueError("los_mode=%r conflicts with los_axis=%r" % (los_mode, los_axis))
+        los_mode, los_axis = 'axis', los_mode
+
+    if isinstance(los_mode, str) and los_mode == 'radial':
+        if los_axis is not None:
+            raise ValueError("los_axis is only used with los_mode='axis'")
+        location = np.zeros(3) if los_location is None else np.array(los_location, dtype=float).reshape(-1)
+        if location.shape != (3,) or not np.all(np.isfinite(location)):
+            raise ValueError('los_location must be a finite 3D position, got %r' % (los_location,))
+        return {'los_mode': 'radial', 'los_location': location, 'los_axis': None}
+
+    if isinstance(los_mode, str) and los_mode == 'axis':
+        if los_axis is None:
+            raise ValueError("los_mode='axis' needs los_axis ('x', 'y' or 'z')")
+        return {'los_mode': 'axis', 'los_location': None, 'los_axis': _axis_index(los_axis)}
+
+    raise ValueError("los_mode must be 'radial' or 'axis' (or 'x', 'y', 'z'), got %r" % (los_mode,))
+
+def los_unit_vectors(positions, los_mode='radial', los_location=None, los_axis=None):
+    '''Unit LOS vector (pointing away from the observer) at each position. positions: shape (n, 3) or (3,). returns: shape (n, 3)'''
+    los = resolve_los(los_mode, los_location, los_axis)
+    positions = np.atleast_2d(positions)
+    if los['los_mode'] == 'axis':
+        n_hat = np.zeros(positions.shape)
+        n_hat[:, los['los_axis']] = 1.0
+        return n_hat
+    v = positions - los['los_location']
+    return v / np.linalg.norm(v, axis=1)[:, np.newaxis]
+
+def sky_components(vectors, positions, los_mode='radial', los_location=None, los_axis=None):
+    '''
+    Project 3D vectors onto the sky plane (the plane perpendicular to the LOS at `positions`) and
+    return their (east, north) components. This is the single definition of sky-plane axes used for
+    every projected angle (multiplet shapes and position angles), so anything measured at the same
+    position is measured in the same plane, relative to the same North.
+
+    vectors: shape (n, 3)
+    positions: shape (n, 3), or (3,) to use one position for all vectors
+    los_mode='axis':   east, north = the two axes after los_axis, cyclically
+                       ('z': east=+x, north=+y; 'x': east=+y, north=+z; 'y': east=+z, north=+x).
+    los_mode='radial': north = projection of +z onto the sky plane (+x if the LOS is along z), east = north x LOS.
+                       With the observer at the origin this is the RA/DEC convention (east = increasing RA).
+    returns: east, north, each shape (n,)
+    '''
+    los = resolve_los(los_mode, los_location, los_axis)
+    vectors = np.atleast_2d(vectors)
+    if los['los_mode'] == 'axis':
+        a = los['los_axis']
+        return vectors[:, (a + 1) % 3], vectors[:, (a + 2) % 3]
+
+    n_hat = los_unit_vectors(positions, **los)
+    ref = np.zeros_like(n_hat)
+    ref[:, 2] = 1.0
+    ref[1.0 - n_hat[:, 2]**2 < 1e-12] = [1.0, 0.0, 0.0]    # +z has no sky-plane projection if the LOS is along z
+    north = ref - np.sum(ref * n_hat, axis=1)[:, np.newaxis] * n_hat
+    north /= np.linalg.norm(north, axis=1)[:, np.newaxis]
+    east = np.cross(north, n_hat)
+    return np.sum(vectors * east, axis=1), np.sum(vectors * north, axis=1)
+
+def los_pair_separations(pos1, pos2, los_mode='radial', los_location=None, los_axis=None):
+    '''
+    Split the separation of pos2 from pos1 (each shape (n, 3)) into transverse and LOS parts.
+    los_mode='axis':   r_par = component along los_axis; r_p = the other two components in quadrature.
+    los_mode='radial': r_par = difference in distance from the observer;
+                       r_p = separation transverse to the LOS through the pair midpoint (see get_proj_dist).
+    returns: r_p (>= 0), r_par (signed; > 0 when pos2 is farther from the observer than pos1)
+    '''
+    los = resolve_los(los_mode, los_location, los_axis)
+    if los['los_mode'] == 'axis':
+        r_par = pos2[:, los['los_axis']] - pos1[:, los['los_axis']]
+    else:
+        r_par = np.sqrt(np.sum((pos2 - los['los_location'])**2, axis=1)) - np.sqrt(np.sum((pos1 - los['los_location'])**2, axis=1))
+    r_p = get_proj_dist(pos1, pos2, pos_obs=los['los_location'], los_mode=los['los_mode'], los_axis=los['los_axis'])
+    return r_p, r_par
+
+def get_proj_dist(pos1, pos2, pos_obs=np.asarray([0, 0, 0]) * .7, use_cat=False, los_mode='radial', los_axis=None):
+    '''
+    Return transverse projected distance of two positions. Returns in same units as given.
+    los_mode='radial': transverse to the LOS from pos_obs (the observer) to the pair midpoint.
+    los_mode='axis' (with los_axis), or 'x'/'y'/'z': transverse to that axis. See resolve_los().
+    '''
+    los = resolve_los(los_mode, pos_obs, los_axis)
     if use_cat:
         pos1 = pos1['x_L2com']
         pos2 = pos2['x_L2com']
@@ -160,10 +275,13 @@ def get_proj_dist(pos1, pos2, pos_obs=np.asarray([0, 0, 0]) * .7, use_cat=False,
     dy = pos2[:, 1] - pos1[:, 1]
     dz = pos2[:, 2] - pos1[:, 2]
 
-    if los_mode == 'z':
-        # plane-parallel LOS along +z: transverse separation is just sqrt(dx^2 + dy^2)
-        return np.sqrt(dx * dx + dy * dy)
-    elif los_mode == 'radial':
+    if los['los_mode'] == 'axis':
+        # plane-parallel LOS: transverse separation is just the two components perpendicular to the axis
+        d = (dx, dy, dz)
+        a = los['los_axis']
+        return np.sqrt(d[(a + 1) % 3] * d[(a + 1) % 3] + d[(a + 2) % 3] * d[(a + 2) % 3])
+    else:
+        pos_obs = los['los_location']
         d2 = dx * dx + dy * dy + dz * dz
         ox = 0.5 * (pos2[:, 0] + pos1[:, 0]) - pos_obs[0]
         oy = 0.5 * (pos2[:, 1] + pos1[:, 1]) - pos_obs[1]
@@ -174,8 +292,6 @@ def get_proj_dist(pos1, pos2, pos_obs=np.asarray([0, 0, 0]) * .7, use_cat=False,
         perp2 = d2 - parallel2
         np.maximum(perp2, 0.0, out=perp2)
         return np.sqrt(perp2)
-    else:
-        raise ValueError("los_mode must be 'radial' or 'z'")
 
 ############
 # CARTESIAN FUNCTIONS
@@ -224,38 +340,28 @@ def get_points_in_plane(group_points, los_location=np.asarray([0,0,0]), n_groups
     
     return group_points_in_plane
 
-def get_orientation_angle_cartesian(points1, points2, los_location=np.asarray([0, 0, 0]), los_mode='radial'):
+def get_orientation_angle_cartesian(points1, points2, los_location=None, los_mode='radial', los_axis=None):
     '''
-    Get the orientation of points1 relative to points2 projected onto a plane perpendicular to the LOS.
-    "North" is +y for los_mode='z', or the projection of +z onto the sky plane for los_mode='radial'.
+    Position angle of points1 relative to points2, measured East of North in the sky plane at the pair
+    midpoint.
+    Both directions of a pair are measured in the same plane, so swapping points1 and points2 adds exactly pi.
+    (Shapes, from calculate_2D_group_orientation, are measured E of N in their own sky plane.)
+
+    Known limitation (radial LOS): a shape angle (North of the shape's plane) minus this angle (North of the
+    midpoint plane) mixes two different Norths. Where the LOS is close to +/-z (North = projection of +z) they
+    can differ a lot, e.g. an observer far along -z of a box does not reproduce los_axis='z' (outer bins off by
+    ~30% in tests). An observer along x or y is unaffected. Fix if needed: rotate the shape axis into the
+    midpoint plane (rotation taking the shape's LOS to the midpoint LOS) before comparing.
 
     points1, points2: arrays of shape (n_points, 3)
-    los_location: observer location (used only when los_mode='radial')
-    los_mode: 'radial' or 'z'
+    los_mode, los_location, los_axis: line of sight, see resolve_los(). Default: radial, observer at the origin.
     returns: array of shape (n_points,)
     '''
-    dx = points2[:, 0] - points1[:, 0]
-    dy = points2[:, 1] - points1[:, 1]
-    dz = points2[:, 2] - points1[:, 2]
-
-    if los_mode == 'z':
-        # plane-parallel LOS along +z: sky plane is xy, North = +y, East = +x
-        # position angle of the separation: arctan2(dx, dy)  (East-of-North)
-        return np.arctan2(dx, dy)
-    elif los_mode == 'radial':
-        mx = 0.5 * (points1[:, 0] + points2[:, 0]) - los_location[0]
-        my = 0.5 * (points1[:, 1] + points2[:, 1]) - los_location[1]
-        mz = 0.5 * (points1[:, 2] + points2[:, 2]) - los_location[2]
-        mnorm = np.sqrt(mx * mx + my * my + mz * mz)
-        nx = mx / mnorm
-        ny = my / mnorm
-        nz = mz / mnorm
-        proj_alpha = dx * ny - dy * nx
-        d_dot_n = dx * nx + dy * ny + dz * nz
-        proj_delta = nz * d_dot_n - dz
-        return np.arctan2(proj_alpha, proj_delta)
-    else:
-        raise ValueError("los_mode must be 'radial' or 'z'")
+    los = resolve_los(los_mode, los_location, los_axis)
+    east, north = sky_components(points2 - points1, 0.5 * (points1 + points2), **los)
+    if los['los_mode'] == 'radial':
+        return np.arctan2(-east, -north)
+    return np.arctan2(east, north)
 
 
 def projected_separation_ra_dec(ra1, dec1, x1, y1, z1, ra2, dec2, x2, y2, z2): 
