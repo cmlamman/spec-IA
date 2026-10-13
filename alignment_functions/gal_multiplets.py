@@ -694,7 +694,7 @@ def _process_one_3D_batch(batch_index, group_batch_center_loc, group_batch_orien
 
 def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), np.log10(100), 16), pimax='variable', transverse_max = 1, los_max=1, print_info=True, sim_label='example',
                    periodic_boundary=False, n_batches = 10, save_intermediate=False, save_info=False,
-                   return_pair_counts=False, n_jobs=1, los_mode=None, los_location=None, los_axis=None, box_size=None):
+                   return_pair_counts=False, n_jobs=1, los_mode=None, los_location=None, los_axis=None, box_size=None,  n_group_min=2, n_group_max=None):
     '''
     A high-level function to calculate projected multiplet alignment for a set of points in 3D comoving space.
     Input points and parameters can be in any units as long as they are consistent.
@@ -773,6 +773,13 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
         unique, counts = np.unique(multiplet_table['n_group'], return_counts=True)
         print('size:', [u for u in np.asarray(unique)])
         print('counts:', [c for c in np.asarray(counts)])
+    # NEW: keep only multiplets with n_group_min <= n_group <= n_group_max
+    keep = multiplet_table['n_group'] >= n_group_min
+    if n_group_max is not None:
+        keep &= multiplet_table['n_group'] <= n_group_max
+    multiplet_table = multiplet_table[keep]
+    if len(multiplet_table) < n_batches:   # existing check, now after the filter
+        raise ValueError(...)
     
     if save_info:
         # save a short text file with multiplet info
