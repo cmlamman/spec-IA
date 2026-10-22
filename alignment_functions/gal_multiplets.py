@@ -694,7 +694,8 @@ def _process_one_3D_batch(batch_index, group_batch_center_loc, group_batch_orien
 
 def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), np.log10(100), 16), pimax='variable', transverse_max = 1, los_max=1, print_info=True, sim_label='example',
                    periodic_boundary=False, n_batches = 10, save_intermediate=False, save_info=False,
-                   return_pair_counts=False, n_jobs=1, los_mode=None, los_location=None, los_axis=None, box_size=None,  n_group_min=2, n_group_max=None):
+                   return_pair_counts=False, n_jobs=1, los_mode=None, los_location=None, los_axis=None, box_size=None, multiplet_catalog=None, n_group_min=2, n_group_max=None):
+    # added argument for multiplet_catalog
     '''
     A high-level function to calculate projected multiplet alignment for a set of points in 3D comoving space.
     Input points and parameters can be in any units as long as they are consistent.
@@ -717,6 +718,10 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
     box_size (optional): side length(s) of the periodic box, scalar or length 3. Default is the extent of points_3D along each axis.
     n_jobs (int, optional): Number of parallel worker processes for batches, via joblib. Default is 1 (sequential). Set to -1 to use all available cores.
     los_mode, los_location, los_axis: line of sight, see above (and resolve_los() in coordinate_functions).
+    multiplet_catalog (optional): a table from make_group_catalog, made once from the same points_3D, LOS and  
+                linking lengths. If None (default), multiplets are found here.                                    
+        n_group_min, n_group_max (optional): keep only multiplets with n_group_min <= n_group <= n_group_max.       
+                Defaults (2, None) keep all multiplets. Pairs: (2, 2), triplets: (3, 3), quadruplets+: (4, None). 
 
     Returns:
     Astropy table with columns:
@@ -724,7 +729,7 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
     'pimax': the pimax used for each bin, in the same units as points_3D.
     'relAng_plot', 'relAng_plot_e': measured alignment signal and error in each bin.
     'pair_counts' (if return_pair_counts): number of pairs in each bin, if return_pair_counts is True.
-    The LOS is recorded in the table header (LOSMODE, and LOSAXIS or LOSOBSX/Y/Z) and in the saved file names.
+    The LOS is recorded in the table header (LOSMODE, and LOSAXIS or LOSOBSX/Y/Z, NGMIN, NGMAX) and in the saved file names.
     '''
     # validate the LOS once; `los` is then passed unchanged to every LOS-dependent step
     if los_mode is None:
@@ -762,28 +767,34 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
     if print_info:
         print('Finding multiplets')
     
-    multiplet_table = make_group_catalog(None, comoving_points=points_3D, transverse_max=transverse_max, los_max=los_max, max_n=100, use_sky_coords=False, **los)
-    if len(multiplet_table) < n_batches:
-        raise ValueError('Found %d multiplets, fewer than n_batches=%d' % (len(multiplet_table), n_batches))
-    if print_info:
-        print('Found %d multiplets' % len(multiplet_table), 'averange number of members: %f' % np.mean(multiplet_table['n_group']))  
+    if multiplet_catalog is None:   # find multiplets as before, or reuse a catalog made once with make_group_catalog
+            multiplet_table = make_group_catalog(None, comoving_points=points_3D, transverse_max=transverse_max, los_max=los_max, max_n=100, use_sky_coords=False, **los)
+        else:                          
+            multiplet_table = multiplet_catalog
+        if len(multiplet_table) < n_batches:
+            raise ValueError('Found %d multiplets, fewer than n_batches=%d' % (len(multiplet_table), n_batches)) 
+        if print_info:
+            print('Found %d multiplets' % len(multiplet_table), 'averange number of members: %f' % np.mean(multiplet_table['n_group']))  
     # print binned counts of multiplet sizes
     if print_info:
         print('Multiplet size counts:') 
         unique, counts = np.unique(multiplet_table['n_group'], return_counts=True)
         print('size:', [u for u in np.asarray(unique)])
         print('counts:', [c for c in np.asarray(counts)])
-    # NEW: keep only multiplets with n_group_min <= n_group <= n_group_max
+    # keep only multiplets with n_group_min <= n_group <= n_group_max
     keep = multiplet_table['n_group'] >= n_group_min
     if n_group_max is not None:
         keep &= multiplet_table['n_group'] <= n_group_max
     multiplet_table = multiplet_table[keep]
-    if len(multiplet_table) < n_batches:   # existing check, now after the filter
-        raise ValueError(...)
+    size_tag = '_n' + str(n_group_min) + 'to' + str(n_group_max)   # Defined size_tag
+    if len(multiplet_table) < n_batches:
+        raise ValueError('%d multiplets left after the size filter, fewer than n_batches=%d' % (len(multiplet_table), n_batches))   # added error message (was just ellipses before)
+    if print_info:
+        print('%d multiplets after size filter (n_group_min=%s, n_group_max=%s)' % (len(multiplet_table), n_group_min, n_group_max))   # print of the count after filtering
     
     if save_info:
         # save a short text file with multiplet info
-        multiplet_info_path = save_directory + '/multiplet_info_'+sim_label+'.txt'
+        multiplet_info_path = save_directory + '/multiplet_info_'+sim_label+size_tag+'.txt'
         with open(multiplet_info_path, 'w') as f:
             f.write('Number of multiplets: %d\n' % len(multiplet_table))
             f.write('Average number of members: %f\n' % np.mean(multiplet_table['n_group']))
@@ -826,7 +837,7 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
     random.shuffle(indices)
     multiplet_table = multiplet_table[indices]
 
-    results_base_path = save_directory + '/MIA_'+str(len(R_bins))+'bins_'+str(round(np.min(R_bins), 3))+'_'+str(round(np.max(R_bins), 3))+'_counts'+str(len(points_3D))+'_sim'+sim_label+'_'+los_tag+'_'+str(n_batches)+'batches_'
+    results_base_path = save_directory + '/MIA_'+str(len(R_bins))+'bins_'+str(round(np.min(R_bins), 3))+'_'+str(round(np.max(R_bins), 3))+'_counts'+str(len(points_3D))+'_sim'+sim_label+'_'+los_tag+size_tag+'_'+str(n_batches)+'batches_' # added size_tag
     print('Results base path:', results_base_path)
 
     batch_size = int(len(multiplet_table)/n_batches)
@@ -889,7 +900,9 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
         results.meta['LOSAXIS'] = 'xyz'[los['los_axis']]
     else:
         results.meta['LOSOBSX'], results.meta['LOSOBSY'], results.meta['LOSOBSZ'] = [float(v) for v in los['los_location']]
-
+    results.meta['NGMIN'] = n_group_min # size range in the header
+    results.meta['NGMAX'] = -1 if n_group_max is None else n_group_max # -1 = no upper limit
+    
     save_path = results_base_path+'.fits'
     if save_path is not None:
         results.write(save_path, overwrite=True)
