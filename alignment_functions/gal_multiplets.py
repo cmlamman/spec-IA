@@ -768,13 +768,13 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
         print('Finding multiplets')
     
     if multiplet_catalog is None:   # find multiplets as before, or reuse a catalog made once with make_group_catalog
-            multiplet_table = make_group_catalog(None, comoving_points=points_3D, transverse_max=transverse_max, los_max=los_max, max_n=100, use_sky_coords=False, **los)
-        else:                          
-            multiplet_table = multiplet_catalog
-        if len(multiplet_table) < n_batches:
-            raise ValueError('Found %d multiplets, fewer than n_batches=%d' % (len(multiplet_table), n_batches)) 
-        if print_info:
-            print('Found %d multiplets' % len(multiplet_table), 'averange number of members: %f' % np.mean(multiplet_table['n_group']))  
+        multiplet_table = make_group_catalog(None, comoving_points=points_3D, transverse_max=transverse_max, los_max=los_max, max_n=100, use_sky_coords=False, **los)
+    else:                          
+        multiplet_table = multiplet_catalog
+    if len(multiplet_table) < n_batches:
+        raise ValueError('Found %d multiplets, fewer than n_batches=%d' % (len(multiplet_table), n_batches)) 
+    if print_info:
+        print('Found %d multiplets' % len(multiplet_table), 'averange number of members: %f' % np.mean(multiplet_table['n_group']))  
     # print binned counts of multiplet sizes
     if print_info:
         print('Multiplet size counts:') 
