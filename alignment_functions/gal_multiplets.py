@@ -8,6 +8,7 @@ from alignment_functions.basic_alignment import *
 from geometry_functions.coordinate_functions import get_proj_dist
 import random
 import warnings
+import hashlib
 
 
 H0 = 69.6
@@ -664,13 +665,12 @@ def _process_one_3D_batch(batch_index, group_batch_center_loc, group_batch_orien
     if batch_index % 50 == 0 and print_info:
         print('working on batch', batch_index, 'sim:', sim_label, flush=True)
 
-    if os.path.exists(batch_save_path):
+    # resume from a saved batch only when saving intermediates. The file name includes a hash of every
+    # setting that affects the result (see get_MIA_from3D), so a saved file is never reused for other settings.
+    pair_counts_save_path = batch_save_path.replace('.npy', '_paircounts.npy')
+    if save_intermediate and os.path.exists(batch_save_path) and (not return_pair_counts or os.path.exists(pair_counts_save_path)):
         pa_rel_binned = np.load(batch_save_path)
-        pair_counts = None
-        if return_pair_counts:
-            pair_counts_save_path = batch_save_path.replace('.npy', '_paircounts.npy')
-            if os.path.exists(pair_counts_save_path):
-                pair_counts = np.load(pair_counts_save_path)
+        pair_counts = np.load(pair_counts_save_path) if return_pair_counts else None
         return batch_index, pa_rel_binned, pair_counts
 
     pa_rel_binned = calculate_rel_ang_cartesian_binAverage(
@@ -683,7 +683,6 @@ def _process_one_3D_batch(batch_index, group_batch_center_loc, group_batch_orien
     if return_pair_counts:
         pa_rel_binned, pair_counts = pa_rel_binned
         if save_intermediate:
-            pair_counts_save_path = batch_save_path.replace('.npy', '_paircounts.npy')
             np.save(pair_counts_save_path, pair_counts)
 
     if save_intermediate:
@@ -715,7 +714,15 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
     transverse_max, los_max: maximum transverse and line-of-sight separation for points to be considered in the same multiplet, in the same units as points_3D. default is 1 for each.
     sim_label (optional): number to keep track of running multiple sims
     periodic_boundary (optional): whether to use periodic boundary conditions. If True, will extend the box by adding copies of the points from each side.
-    box_size (optional): side length(s) of the periodic box, scalar or length 3. Default is the extent of points_3D along each axis.
+    box_size (optional): side length(s) of the periodic box, scalar or length 3. Default is the extent of points_3D along each axis,
+                which is only right if the points fill the box. Give it explicitly for a cut catalog.
+    n_batches: the (shuffled) multiplets are split into n_batches random batches; every multiplet is used and batch sizes
+                differ by at most one. The error is the standard error over batches.
+    save_intermediate (optional): save each batch's binned result as <results base path><batch>.npy (and
+                _paircounts.npy), for e.g. building a covariance later. With save_intermediate=True, existing batch files
+                with the same name are loaded instead of recomputed (resume). The name includes 'cfg' + a hash of the
+                points, multiplets, R_bins, pimax, linking lengths and periodic box, so files are only reused for
+                identical settings.
     n_jobs (int, optional): Number of parallel worker processes for batches, via joblib. Default is 1 (sequential). Set to -1 to use all available cores.
     los_mode, los_location, los_axis: line of sight, see above (and resolve_los() in coordinate_functions).
     multiplet_catalog (optional): a table from make_group_catalog, made once from the same points_3D, LOS and  
@@ -811,6 +818,9 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
         box_max = np.max(points_3D, axis=0)
         if box_size is None:
             box_size = box_max - box_min
+            if np.max(box_size) - np.min(box_size) > 0.01 * np.max(box_size):
+                warnings.warn("box_size inferred from the extent of points_3D differs between axes (%s). If the catalog "
+                              "was cut, the periodic copies are misplaced; pass box_size explicitly." % box_size)
             if print_info:
                 print('Using box_size =', box_size)
         box_size = np.broadcast_to(np.asarray(box_size, dtype=float), (3,))
@@ -837,15 +847,19 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
     random.shuffle(indices)
     multiplet_table = multiplet_table[indices]
 
-    results_base_path = save_directory + '/MIA_'+str(len(R_bins))+'bins_'+str(round(np.min(R_bins), 3))+'_'+str(round(np.max(R_bins), 3))+'_counts'+str(len(points_3D))+'_sim'+sim_label+'_'+los_tag+size_tag+'_'+str(n_batches)+'batches_' # added size_tag
+    # hash of every input that changes the batch results, so saved batch files are never reused for other settings
+    config_hash = hashlib.sha1()
+    for item in [points_3D, R_bins, pimax_values, [transverse_max, los_max, float(periodic_boundary)],
+                 box_size if periodic_boundary else [], multiplet_table['center_loc'], multiplet_table['orientation'], multiplet_table['n_group']]:
+        config_hash.update(np.ascontiguousarray(item, dtype=float).tobytes())
+    config_tag = 'cfg' + config_hash.hexdigest()[:10]
+
+    results_base_path = save_directory + '/MIA_'+str(len(R_bins))+'bins_'+str(round(np.min(R_bins), 3))+'_'+str(round(np.max(R_bins), 3))+'_counts'+str(len(points_3D))+'_sim'+sim_label+'_'+los_tag+size_tag+'_'+config_tag+'_'+str(n_batches)+'batches_' # added size_tag
     print('Results base path:', results_base_path)
 
-    batch_size = int(len(multiplet_table)/n_batches)
     batch_specs = []
-    for i in range(int(n_batches)):
-        i_start = i * batch_size
-        i_end = i_start + batch_size
-        group_batch = multiplet_table[i_start:i_end]
+    for i, batch_indices in enumerate(np.array_split(np.arange(len(multiplet_table)), int(n_batches))):  # keeps every multiplet
+        group_batch = multiplet_table[batch_indices]
         batch_save_path = results_base_path + str(i)+'.npy'
         batch_specs.append({
             'batch_index': i,
@@ -902,7 +916,10 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
         results.meta['LOSOBSX'], results.meta['LOSOBSY'], results.meta['LOSOBSZ'] = [float(v) for v in los['los_location']]
     results.meta['NGMIN'] = n_group_min # size range in the header
     results.meta['NGMAX'] = -1 if n_group_max is None else n_group_max # -1 = no upper limit
-    
+    results.meta['CFGHASH'] = config_tag
+    if periodic_boundary:
+        results.meta['BOXX'], results.meta['BOXY'], results.meta['BOXZ'] = [float(v) for v in box_size]
+
     save_path = results_base_path+'.fits'
     if save_path is not None:
         results.write(save_path, overwrite=True)
