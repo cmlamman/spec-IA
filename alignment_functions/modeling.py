@@ -110,16 +110,76 @@ def get_relative_bias(z, wp, D_base, wp_base):
 #####################################################################################################
 # FUNCTION TO CONVERT BETWEEN TAU AND A_IA
 #####################################################################################################
-def tau_to_AIA(tau, z, norm_at_z0=False):
+# C1 rho_crit of the NLA literature (Joachimi+11 Sec. 4.1, Singh+15 Sec. 2.1). CCL and CosmoSIS use
+# 5e-14 h^-2 Msun Mpc^3 x rho_crit = 0.013877 instead; pass C1rho_crit=0.013877 to match them.
+C1_RHO_CRIT_STANDARD = 0.0134
+
+# AbacusSummit c000 (abacus.par of AbacusSummit_base_c000_ph000), the cosmology of the bundled P(k) abacus_ps_nl.
+# Omega_M includes the massive neutrino (omega_ncdm = 0.00064). No radiation, as in the NLA growth convention.
+cosmo_c000 = LambdaCDM(H0=67.36, Om0=0.315192, Ode0=0.684808)
+
+
+def growth_factor(z, cosmology):
     '''
-    convert from our tau parameter to the commonly used IA amplitude parameter A_IA.
-    If norm_at_z0 is False, this will be normalized so \bar{D}(z) = (1+z)D(z) is 1 at matter-dominated era (z=infinity).
-    If norma_at_z1 is True, this will be normalized so D(z) is 1 at present epoch (z=0).
+    Linear growth factor D(z) normalised to D(0) = 1, for an astropy LambdaCDM cosmology (w = -1, any curvature):
+    D(a) proportional to E(a) int_0^a da' / (a' E(a'))^3. Exact without radiation; if the cosmology has radiation
+    (Tcmb0 > 0) it is included in E and the result is approximate at the ~1e-4 level for z < 3.
     '''
-    C1 = 5*10**(-14) * ((u.Mpc)**3 / h**2) / M_sun
-    rho_m0 = cosmo.Om(z) * cosmo.critical_density0
-    AIA = - (tau / C1) * (D(z, norm_at_z0=norm_at_z0) / rho_m0)
-    return AIA.to(u.Mpc/u.Mpc).value
+    w = np.atleast_1d(cosmology.w(np.array([0.0, 1.0, 3.0])))
+    if not np.allclose(w, -1.0):
+        raise NotImplementedError('growth_factor() is only implemented for w = -1 (LambdaCDM) cosmologies')
+
+    def unnormalised(a):
+        integral = scipy.integrate.quad(lambda x: 1 / (x * cosmology.efunc(1/x - 1))**3, 0, a,
+                                        epsabs=0, epsrel=1e-11, limit=500)[0]
+        return cosmology.efunc(1/a - 1) * integral
+
+    zz = np.atleast_1d(np.asarray(z, dtype=float))
+    out = np.array([unnormalised(1 / (1 + zi)) for zi in zz]) / unnormalised(1.0)
+    return out.reshape(np.shape(z)) if np.ndim(z) else float(out[0])
+
+
+def tau_to_AIA(tau, z, convention='standard', cosmology=None, C1rho_crit=None, norm_at_z0=None):
+    '''
+    Convert our tau parameter (L24 Eq. 6, tau < 0 for radial alignment) to the NLA amplitude A_IA (> 0 for radial).
+
+    convention='standard' (default): A_IA = -tau D(z) / (C1rho_crit Omega_m,0), with D(0) = 1.
+        This is the NLA convention of CCL, CosmoSIS, Joachimi+11, Singh+15 and Siegel+25 (parity draft Eq. 44).
+        cosmology (required): the astropy cosmology of the P(k) used in the model (e.g. cosmo_c000 for the bundled
+            AbacusSummit P(k)); Omega_m,0 = cosmology.Om0 and D(z) = growth_factor(z, cosmology).
+        C1rho_crit: default C1_RHO_CRIT_STANDARD = 0.0134; pass 0.013877 to match CCL/CosmoSIS exactly.
+    convention='L24': the conversion published in Lamman et al. 2024 (Eq. 17), for back-compatibility only.
+        A_IA = -tau D(z) / (C1 rho_crit,0 Omega_m(z)) in this module's LambdaCDM(69.6, 0.286) cosmology, with
+        C1 = 5e-14 h^-2 Msun^-1 Mpc^3 (C1 rho_crit = 0.01388) and D = D(z, norm_at_z0):
+        norm_at_z0=False (default, as in L24) normalises (1+z)D to 1 in matter domination; norm_at_z0=True (as used
+        for the DR2 A_IA column) normalises D(0) = 1. It takes no cosmology or C1rho_crit.
+        At z = 0.8 its A_IA is 2.94x lower than the standard one with c000: 1.036 (C1 rho_crit) x 2.22
+        (Omega_m(z) of the 0.286 cosmology vs Omega_m,0 of c000) x 1.28 (growth normalisation).
+    '''
+    if convention == 'standard':
+        if norm_at_z0 is not None:
+            raise ValueError('norm_at_z0 only applies to convention="L24"; the standard convention has D(0) = 1')
+        if cosmology is None:
+            raise ValueError('convention="standard" needs cosmology=: the cosmology of the P(k) used in the model '
+                             '(e.g. cosmo_c000 for the bundled AbacusSummit P(k)). Use convention="L24" for the old conversion.')
+        C1rho = C1_RHO_CRIT_STANDARD if C1rho_crit is None else C1rho_crit
+        return -np.asarray(tau, dtype=float) * growth_factor(z, cosmology) / (C1rho * cosmology.Om0)
+    elif convention == 'L24':
+        if cosmology is not None or C1rho_crit is not None:
+            raise ValueError('convention="L24" reproduces the published conversion, with its own fixed cosmology '
+                             'and C1; it takes no cosmology or C1rho_crit')
+        C1 = 5*10**(-14) * ((u.Mpc)**3 / h**2) / M_sun
+        rho_m0 = cosmo.Om(z) * cosmo.critical_density0
+        AIA = - (tau / C1) * (D(z, norm_at_z0=bool(norm_at_z0)) / rho_m0)
+        return AIA.to(u.Mpc/u.Mpc).value
+    else:
+        raise ValueError('convention must be "standard" or "L24", got ' + repr(convention))
+
+
+def AIA_to_tau(A_IA, z, convention='standard', cosmology=None, C1rho_crit=None, norm_at_z0=None):
+    '''Inverse of tau_to_AIA, with the same arguments and conventions.'''
+    return np.asarray(A_IA, dtype=float) / tau_to_AIA(1.0, z, convention=convention, cosmology=cosmology,
+                                                         C1rho_crit=C1rho_crit, norm_at_z0=norm_at_z0)
 
 
 #####################################################################################################
