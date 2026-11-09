@@ -25,16 +25,16 @@ import sys
 sys.path.append('/global/homes/c/clamman/IA/')
 
 import pathlib
-parent_path = pathlib.Path.cwd().parent
-if 'IA' not in str(parent_path):   # for working in other directories. May need to rename "IA" to wherever spec-IA is located.
-    parent_path = parent_path / 'IA'
-    print('Parent path is not the IA directory. Assuming parent directory is IA')
+# Locate the repo from this file, not from the working directory, so the module imports from anywhere
+# (e.g. from tests/). parent_path is the directory that contains spec-IA, as before.
+repo_path = pathlib.Path(__file__).resolve().parents[1]
+parent_path = repo_path.parent
 
 # reading in a file for the power spectrum
-ps_path = parent_path / 'spec-IA/example_catalogs/AbacusSummit_base_c000_z0.800_power_nfft2048.csv'
+ps_path = repo_path / 'example_catalogs/AbacusSummit_base_c000_z0.800_power_nfft2048.csv'
 abacus_ps_nl = pd.read_csv(ps_path) # nonlinear matter power spectrum from AbacusSummit
 
-kz_spline_parent_paths = parent_path / 'spec-IA/example_catalogs/kz_integral_splines/'
+kz_spline_parent_paths = repo_path / 'example_catalogs/kz_integral_splines/'
 kz_spline_paths = list(kz_spline_parent_paths.glob('*.npy')) # pre-computed values of the kz integral at given values of pimax, made with the above power spectum
 
 
