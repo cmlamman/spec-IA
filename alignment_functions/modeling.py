@@ -35,7 +35,11 @@ ps_path = repo_path / 'example_catalogs/AbacusSummit_base_c000_z0.800_power_nfft
 abacus_ps_nl = pd.read_csv(ps_path) # nonlinear matter power spectrum from AbacusSummit
 
 kz_spline_parent_paths = repo_path / 'example_catalogs/kz_integral_splines/'
-kz_spline_paths = list(kz_spline_parent_paths.glob('*.npy')) # pre-computed values of the kz integral at given values of pimax, made with the above power spectum
+# k_z spline cache version (see load_kz_splines). Bump it whenever what a spline holds changes: the loader rejects
+# every other version, and only current-version files are picked up as defaults.
+KZ_SPLINE_VERSION = 2
+_KZ_TAG = 'kzv' + str(KZ_SPLINE_VERSION)
+kz_spline_paths = sorted(kz_spline_parent_paths.glob('kz_integral_NL_spl_' + _KZ_TAG + '_pimax_*.npz')) # pre-computed values of the kz integral at given values of pimax, made with the above power spectum
 
 
 #####################################################################################################
@@ -140,18 +144,113 @@ _II_ANGULAR = 0.5             # E++ measures cos 2dtheta_A cos 2dtheta_B (the ++
 # pi x (E+) and -4 pi x (E++) these expressions.
 
 
-def precompute_kz_integral(pimax_values, PS_data, directory, PS_min = 1e-4, PS_max = 2e2, n_samples=100, warning_handling='once', pi_weighting=False, gauss_params=None, pimax_rp=None, overwrite=True):
+# k_z spline cache. Splines are .npz archives of plain arrays (read with allow_pickle=False, so they are portable
+# across numpy versions), tagged with KZ_SPLINE_VERSION in both the file name and the contents.
+# Version history:
+#   1 (unversioned: a pickled tck in a file named *.npy) -- k_z integral from PS_min = 1e-4 instead of 0, which
+#     loses 0.07-1.3% of the signal (growing with Pi_max); default n_samples = 100 (1-2% bin-to-bin scatter).
+#   2 -- k_z integral from 0; default n_samples = 1000; metadata stored with the spline.
+KZ_SPLINE_FORMAT = 'spec-IA kz spline'
+_KZ_PREFIX = {'gI': 'kz_integral_NL_spl', 'II': 'kz_integral_II_NL_spl'}
+
+
+def kz_spline_filename(pimax, kind='gI'):
+    '''File name (without directory) of the current-version k_z spline for this Pi_max.
+    kind: 'gI' (precompute_kz_integral; used by compute_rel_e_model and get_rel_e_model) or
+          'II' (precompute_kz_integral_II; used by compute_auto_model).'''
+    return _KZ_PREFIX[kind] + '_' + _KZ_TAG + '_pimax_' + str(round(float(pimax), 2)) + '.npz'
+
+
+def _pk_digest(PS_data):
+    '''sha256 of the P(k) table a spline was made from (stored for provenance; not checked on load).'''
+    import hashlib
+    digest = hashlib.sha256()
+    for col in ('k', 'P'):
+        digest.update(np.ascontiguousarray(np.asarray(PS_data[col], dtype=np.float64)).tobytes())
+    return digest.hexdigest()
+
+
+def _now_iso():
+    import datetime
+    return datetime.datetime.now().isoformat(timespec='seconds')
+
+
+def _save_kz_spline(path, tck, kind, pimax, **meta):
+    '''Write one spline. meta values must be str, int, float or numeric arrays (nothing that needs pickle).'''
+    t, c, k = tck
+    np.savez(path, format=KZ_SPLINE_FORMAT, version=KZ_SPLINE_VERSION, kind=kind, pimax=float(pimax),
+             t=np.asarray(t, float), c=np.asarray(c, float), k=int(k), **meta)
+
+
+def _read_kz_spline(path):
+    '''Return (kind, pimax, tck) for a current-version spline file, or None for anything else
+    (legacy pickled splines, other versions, files that are not splines).'''
+    try:
+        data = np.load(path, allow_pickle=False)
+    except Exception:              # legacy pickles raise here (allow_pickle=False); so do unreadable files
+        return None
+    if not isinstance(data, np.lib.npyio.NpzFile):
+        return None
+    with data:
+        if 'format' not in data.files or str(data['format']) != KZ_SPLINE_FORMAT:
+            return None
+        if int(data['version']) != KZ_SPLINE_VERSION:
+            return None
+        return str(data['kind']), float(data['pimax']), (data['t'].copy(), data['c'].copy(), int(data['k']))
+
+
+def load_kz_splines(paths, kind='gI'):
+    '''
+    Read k_z splines written by precompute_kz_integral (kind='gI') or precompute_kz_integral_II (kind='II').
+    Returns {round(Pi_max, 2): tck}.
+
+    Raises ValueError, rather than skipping files, if any path is not a current-version (KZ_SPLINE_VERSION) spline
+    of this kind. In particular, splines made before the 2026-11 normalization fix (files named *_pimax_*.npy)
+    are always rejected: they start the k_z integral at 1e-4 and use the old K sampling. Regenerate them.
+    '''
+    paths = [str(p) for p in paths]
+    if len(paths) == 0:
+        raise ValueError('No k_z spline files were given. Generate them with precompute_kz_integral() (E+) or '
+                         'precompute_kz_integral_II() (E++) and pass their paths (named "*_' + _KZ_TAG + '_pimax_*.npz").')
+    splines, stale, wrong_kind = {}, [], []
+    for path in paths:
+        content = _read_kz_spline(path)
+        if content is None:
+            stale.append(path)
+        elif content[0] != kind:
+            wrong_kind.append(path + ' (kind ' + repr(content[0]) + ')')
+        else:
+            splines[round(content[1], 2)] = content[2]
+    if stale:
+        maker = 'precompute_kz_integral_II()' if kind == 'II' else 'precompute_kz_integral()'
+        raise ValueError(str(len(stale)) + ' file(s) are not version-' + str(KZ_SPLINE_VERSION) + ' k_z splines and '
+                         'cannot be used. Splines from before the 2026-11 normalization fix (*_pimax_*.npy) integrate '
+                         'k_z from 1e-4 with the old sampling; regenerate them with ' + maker + ' and pass only files '
+                         'named "*_' + _KZ_TAG + '_pimax_*.npz". First file(s): ' + ', '.join(stale[:3]))
+    if wrong_kind:
+        raise ValueError('Expected ' + repr(kind) + ' k_z splines ("gI" from precompute_kz_integral for the E+ models, '
+                         '"II" from precompute_kz_integral_II for compute_auto_model), got: ' + ', '.join(wrong_kind[:3]))
+    return splines
+
+
+def precompute_kz_integral(pimax_values, PS_data, directory, PS_min = 1e-4, PS_max = 2e2, n_samples=1000, warning_handling='once', pi_weighting=False, gauss_params=None, pimax_rp=None, overwrite=True):
     '''
     Precompute the integral of the kz integral and save a spline as a function of K (in log space)
     This is used to speed up the calculation of rel_e_to_tau.
+
+    The spline holds int_0^PS_max dk_z P(k) (K^2/k^2) sinc(k_z Pi_max), k^2 = K^2 + k_z^2, from k_z = 0 exactly:
+    the integrand is finite there (sinc -> 1, K^2/k^2 -> 1). Before version 2 it started at PS_min = 1e-4,
+    which lost a fraction ~2 Pi_max 1e-4/pi of the signal (0.07-1.3%).
+    Files are written as kz_spline_filename(pimax, 'gI') (version KZ_SPLINE_VERSION) in directory.
     
     INPUT:
     ------------------
     pimax_values: array of shape (n,). Line-of-sight distance 
     PS_data: dictonary or DataFrame of matter power spectrum values. Must contain columns 'k' and 'P'. Default is a non-linear matter power spectrum from AbacusSummit.
     directory: string. Directory path to save the spline files.
-    PS_min, PS_max: floats. Range of k to use for the power spectrum [h/Mpc]
-    n_samples: int. Number of samples to use for the spline. For a better integration, this function will add a few more to better sample where sincx = 0
+    PS_min, PS_max: floats. Range of K for the log-spaced spline nodes [h/Mpc]; PS_max is also the upper limit of the k_z integral.
+    n_samples: int. Number of log-spaced K nodes in [PS_min, PS_max]. For a better integration, this function will add a few more to better sample where sincx = 0
+               1000 converges the model to ~3e-4 per bin (100, the old default, gave 1-2% bin-to-bin scatter). Cost: ~45 ms per node per Pi_max.
     gauss_params: array of shape (2n,). Parameters for the gaussian fit. If pi_weighting = True, this is the parameters for the gaussian fit to the 2D correlation function.
                   will use parameters as sigma1, width1, sigma2, width2, etc.
     RETURNS:
@@ -159,13 +258,16 @@ def precompute_kz_integral(pimax_values, PS_data, directory, PS_min = 1e-4, PS_m
     None. Saves the spline files in the directory.
     '''
     
+    if pi_weighting == True:
+        n_gaussians = int(len(gauss_params) / 2)
+        weighted_name = 'kz_integral_NL_spl_' + _KZ_TAG + '_Wpimaxrp_' + str(n_gaussians) + 'D_' + str(pimax_rp) + '.npz'
     if overwrite == False:
         if pi_weighting == False:
-            if all([os.path.exists(directory+'/kz_integral_NL_spl_pimax_'+str(round(float(pmi), 2))+'.npy') for pmi in pimax_values]):
+            if all([os.path.exists(os.path.join(directory, kz_spline_filename(pmi, 'gI'))) for pmi in pimax_values]):
                 print('All files exist. Skipping')
                 return None
         else:
-            if os.path.exists(directory+'/kz_integral_NL_spl_Wpimaxrp_'+str(pimax_rp)+'.pkl'):
+            if os.path.exists(os.path.join(directory, weighted_name)):
                 print('File exists. Skipping')
                 return None
     
@@ -184,7 +286,6 @@ def precompute_kz_integral(pimax_values, PS_data, directory, PS_min = 1e-4, PS_m
             sinc_value = scipy.special.sinc( (kz * pimax) / np.pi )  # THIS SCIPY SINC INCLUDES PI NORMALIZATION > MUST DIVIDE BY PI
             return get_PS(np.sqrt(k_squared)) * (K**2 / k_squared) * sinc_value
     else:
-        n_gaussians = int(len(gauss_params) / 2)
         if n_gaussians == 1:
             def kz_integrand(kz, K):
                 k_squared = kz**2 + K**2
@@ -208,43 +309,46 @@ def precompute_kz_integral(pimax_values, PS_data, directory, PS_min = 1e-4, PS_m
         Ks_extra_values = (np.arange(0, n_pi_steps) * np.pi * max_pi/(3*n_pi_steps)) + float(int(min_pi/np.pi))*np.pi
         Ks_sample_values = np.sort(np.concatenate((Ks_sample_values, Ks_extra_values)))
     
+    meta = dict(kz_min=0.0, kz_max=float(PS_max), K_min=float(PS_min), K_max=float(PS_max), n_samples=int(n_samples),
+                n_extra_K_nodes=int(len(Ks_sample_values) - n_samples), pk_sha256=_pk_digest(PS_data),
+                created=_now_iso())
     if pi_weighting == False:
         for pmi in pimax_values:
             kz_integral_values = []
             for K in Ks_sample_values:
-                kz_integral_values.append(_quad(kz_integrand, a=PS_min, b=PS_max, args=(K, pmi))) # integrate over kz
+                kz_integral_values.append(_quad(kz_integrand, a=0.0, b=PS_max, args=(K, pmi))) # integrate over kz from 0
             tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=0)
             
             # save the spline (round pimax to 2 decimal places in filename)
             pmi_rounded = round(float(pmi), 2)
             print('saving for pimax =', pmi_rounded)
-            with open(directory+'/kz_integral_NL_spl_pimax_'+str(pmi_rounded)+'.npy', 'wb') as f:
-                pickle.dump(tck_kz_integral, f)
+            _save_kz_spline(os.path.join(directory, kz_spline_filename(pmi, 'gI')), tck_kz_integral, 'gI', pmi, **meta)
     
     else:
         kz_integral_values = []
         for K in Ks_sample_values:
-            value = _quad(kz_integrand, a=PS_min, b=PS_max, args=(K,))
+            value = _quad(kz_integrand, a=0.0, b=PS_max, args=(K,))
             kz_integral_values.append(value) # integrate over kz
         tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=0)
         print('saving pimax-weighted values for rp =', pimax_rp)
-        with open(directory+'/kz_integral_NL_spl_Wpimaxrp_'+str(n_gaussians)+'D_'+str(pimax_rp)+'.pkl', 'wb') as f:
-            pickle.dump(tck_kz_integral, f)
+        _save_kz_spline(os.path.join(directory, weighted_name), tck_kz_integral, 'gI_W' + str(n_gaussians) + 'D',
+                        np.nan, gauss_params=np.asarray(gauss_params, float), pimax_rp=str(pimax_rp), **meta)
     print('Finished')
     return None
 
-def precompute_kz_integral_II(pimax_values, PS_data, directory, PS_min = 1e-4, PS_max = 2e2, n_samples=100, warning_handling='once', overwrite=True):
+def precompute_kz_integral_II(pimax_values, PS_data, directory, PS_min = 1e-4, PS_max = 2e2, n_samples=1000, warning_handling='once', overwrite=True):
     '''
     Precompute the kz integral for the II (orientation autocorrelation) model.
     Same as precompute_kz_integral but with squared tidal projection factor (K²/k²)².
+    The k_z integral starts at 0 (see precompute_kz_integral). Files are written as kz_spline_filename(pimax, 'II').
 
     INPUT:
     ------------------
     pimax_values: array of shape (n,). Line-of-sight distance
     PS_data: dictionary or DataFrame of matter power spectrum values. Must contain columns 'k' and 'P'.
     directory: string. Directory path to save the spline files.
-    PS_min, PS_max: floats. Range of k to use for the power spectrum [h/Mpc]
-    n_samples: int. Number of samples to use for the spline.
+    PS_min, PS_max: floats. Range of K for the log-spaced spline nodes [h/Mpc]; PS_max is also the upper limit of the k_z integral.
+    n_samples: int. Number of log-spaced K nodes (1000 converges; the old default of 100 gave 1-3% bin-to-bin scatter).
 
     RETURNS:
     ------------------
@@ -252,7 +356,7 @@ def precompute_kz_integral_II(pimax_values, PS_data, directory, PS_min = 1e-4, P
     '''
 
     if overwrite == False:
-        if all([os.path.exists(directory+'/kz_integral_II_NL_spl_pimax_'+str(round(float(pmi), 2))+'.npy') for pmi in pimax_values]):
+        if all([os.path.exists(os.path.join(directory, kz_spline_filename(pmi, 'II'))) for pmi in pimax_values]):
             print('All files exist. Skipping')
             return None
 
@@ -276,16 +380,18 @@ def precompute_kz_integral_II(pimax_values, PS_data, directory, PS_min = 1e-4, P
     Ks_extra_values = (np.arange(0, n_pi_steps) * np.pi * max_pi/(3*n_pi_steps)) + float(int(min_pi/np.pi))*np.pi
     Ks_sample_values = np.sort(np.concatenate((Ks_sample_values, Ks_extra_values)))
 
+    meta = dict(kz_min=0.0, kz_max=float(PS_max), K_min=float(PS_min), K_max=float(PS_max), n_samples=int(n_samples),
+                n_extra_K_nodes=int(len(Ks_sample_values) - n_samples), pk_sha256=_pk_digest(PS_data),
+                created=_now_iso())
     for pmi in pimax_values:
         kz_integral_values = []
         for K in Ks_sample_values:
-            kz_integral_values.append(_quad(kz_integrand, a=PS_min, b=PS_max, args=(K, pmi)))
+            kz_integral_values.append(_quad(kz_integrand, a=0.0, b=PS_max, args=(K, pmi)))   # from k_z = 0
         tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=0)
 
         pmi_rounded = round(float(pmi), 2)
         print('saving II for pimax =', pmi_rounded)
-        with open(directory+'/kz_integral_II_NL_spl_pimax_'+str(pmi_rounded)+'.npy', 'wb') as f:
-            pickle.dump(tck_kz_integral, f)
+        _save_kz_spline(os.path.join(directory, kz_spline_filename(pmi, 'II')), tck_kz_integral, 'II', pmi, **meta)
 
     print('Finished')
     return None
@@ -393,12 +499,8 @@ def compute_rel_e_model(rel_e_measurement, wp_measurement, pimax_values, b_gal, 
         D_norm = (D(z) / D(PS_z))**2
 
         
-    # read in the pre-computed value of the kz integral (made with precompute_kz_integral)
-    splines = {}
-    for path in precomputed_kz_integral_paths:
-        pmi_str = path.split('_')[-1].split('.npy')[0]
-        pmi_key = round(float(pmi_str), 2)
-        splines[pmi_key] = np.load(path, allow_pickle=True)
+    # read in the pre-computed value of the kz integral (made with precompute_kz_integral; older versions are rejected)
+    splines = load_kz_splines(precomputed_kz_integral_paths, kind='gI')
 
     def get_kz_integral_spl(K, pimax, b_gal):
         pmi_key = round(float(pimax), 2)
@@ -487,13 +589,8 @@ def get_rel_e_model(R_bin_min, R_bin_max, pimax_values, wp_values, b_gal, z = 0.
         D_norm = (D(z) / D(PS_z))**2
 
         
-    # read in the pre-computed value of the kz integral (made with precompute_kz_integral)
-    splines = {}
-    for path in precomputed_kz_integral_paths:
-        pmi_str = path.split('_')[-1].split('.npy')[0]
-        pmi_key = round(float(pmi_str), 2)
-        with open(path, 'rb') as f:
-            splines[pmi_key] = pickle.load(f)
+    # read in the pre-computed value of the kz integral (made with precompute_kz_integral; older versions are rejected)
+    splines = load_kz_splines(precomputed_kz_integral_paths, kind='gI')
 
     def get_kz_integral_spl(K, pimax, b_gal):
         pmi_key = round(float(pimax), 2)
@@ -591,12 +688,8 @@ def compute_auto_model(rel_e_measurement, wp_measurement, z = 0.8, rel_e_randoms
         D_norm = (D(z) / D(PS_z))**2
 
 
-    # read in the pre-computed value of the kz integral (made with precompute_kz_integral_II)
-    splines = {}
-    for path in precomputed_kz_integral_paths:
-        pmi_str = path.split('_')[-1].split('.npy')[0]
-        pmi_key = round(float(pmi_str), 2)
-        splines[pmi_key] = np.load(path, allow_pickle=True)
+    # read in the pre-computed value of the kz integral (made with precompute_kz_integral_II; older versions are rejected)
+    splines = load_kz_splines(precomputed_kz_integral_paths, kind='II')
 
     def get_kz_integral_spl(K, pimax):
         pmi_key = round(float(pimax), 2)
