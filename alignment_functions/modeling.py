@@ -122,6 +122,23 @@ def tau_to_AIA(tau, z, norm_at_z0=False):
 # FUNCTION TO CALCULATE MODEL PREDICTION FOR GIVEN MEASUREMENT OF RELATIVE PROJECTED ELLIPTICITY
 #####################################################################################################
 
+# Normalization of the projected models, shared by compute_rel_e_model, get_rel_e_model and compute_auto_model.
+# For a bin [Rmin, Rmax) with |Pi| < Pi_max, and tracers delta_g = b delta (L24 Eqs. 4-6):
+#
+#   E+  = -tau b/(2 Pi_max + wbar_p) int K dK/(2 pi) Jbar_2(K) W(K)
+#   E++ = tau^2 /(2 Pi_max + wbar_p) int K dK/(2 pi) (1/2)[Jbar_0(K) + Jbar_4(K)] W_II(K)
+#   W(K) = int_{-inf}^{inf} dk_z/(2 pi) (K^2/k^2)^n P(k) 2 sin(k_z Pi_max)/k_z
+#        = (2 Pi_max/pi) int_0^inf dk_z (K^2/k^2)^n P(k) sinc(k_z Pi_max)          (n = 1 for E+, 2 for E++)
+#
+# The k_z splines (precompute_kz_integral*) hold int_0^inf dk_z (K^2/k^2)^n P sinc(k_z Pi_max), so:
+_K_MEASURE = 1 / (2*np.pi)    # d^2K/(2 pi)^2 after the azimuthal integral: K dK/(2 pi). Was 1 (model 2 pi too high).
+_LOS_PREFACTOR = 2 / np.pi    # W = (2 Pi_max/pi) x spline: the spline is k_z > 0 only. Was 1/pi (model 2x too low).
+_II_ANGULAR = 0.5             # E++ measures cos 2dtheta_A cos 2dtheta_B (the ++ component only); its azimuthal
+                              # average is <cos^2 2psi e^{iKR cos psi}> -> (J0 + J4)/2. Was 2 ("pair_factor").
+# Checked against Singh+15 Eq. 9 / Okumura & Taruya 2020 Eq. 11 (finite Pi_max) and Joachimi+11 / CCL / CosmoSIS:
+# see tests/test_normalization.py and IA/parity/validation/norm_check/. The models before this fix were
+# pi x (E+) and -4 pi x (E++) these expressions.
+
 
 def precompute_kz_integral(pimax_values, PS_data, directory, PS_min = 1e-4, PS_max = 2e2, n_samples=100, warning_handling='once', pi_weighting=False, gauss_params=None, pimax_rp=None, overwrite=True):
     '''
@@ -388,7 +405,7 @@ def compute_rel_e_model(rel_e_measurement, wp_measurement, pimax_values, b_gal, 
         if pmi_key not in splines:
             print('Pimax value of', pmi_key,'not found in pre-computed values. Use precompute_kz_integral() to generate first. Continuing with a pimax value of 30.0 Mpc/h')
             pmi_key = 30.0
-        front_constant = b_gal * pimax / np.pi
+        front_constant = _LOS_PREFACTOR * b_gal * pimax
         return front_constant * (interpolate.splev(np.log10(K), splines[pmi_key]))
     
     randoms = 0
@@ -415,7 +432,7 @@ def compute_rel_e_model(rel_e_measurement, wp_measurement, pimax_values, b_gal, 
     
     def K_integrand(K, Rmin, Rmax, pimax, b_gal):
         kz_integral = get_kz_integral_spl(K, pimax, b_gal)
-        return K * get_fancyJ(Rmin, Rmax, K) * kz_integral
+        return _K_MEASURE * K * get_fancyJ(Rmin, Rmax, K) * kz_integral
     
     def get_model_est(Rmin, Rmax, pimax, b_gal, tau=1, PS_min = 10**-4, PS_max = 100):
         bar_wp = get_bar_wp(Rmin, Rmax)
@@ -483,7 +500,7 @@ def get_rel_e_model(R_bin_min, R_bin_max, pimax_values, wp_values, b_gal, z = 0.
         if pmi_key not in splines:
             print('Pimax value of', pmi_key, 'not found in pre-computed values. Use precompute_kz_integral() to generate first. Continuing with a pimax value of 30.0 Mpc/h')
             pmi_key = 30.0
-        front_constant = b_gal * pimax / np.pi
+        front_constant = _LOS_PREFACTOR * b_gal * pimax
         return front_constant * (interpolate.splev(np.log10(K), splines[pmi_key]))
         
     R_bin_centers = (R_bin_min+R_bin_max)/2
@@ -502,7 +519,7 @@ def get_rel_e_model(R_bin_min, R_bin_max, pimax_values, wp_values, b_gal, z = 0.
     
     def K_integrand(K, Rmin, Rmax, pimax, b_gal):
         kz_integral = get_kz_integral_spl(K, pimax, b_gal)
-        return K * get_fancyJ(Rmin, Rmax, K) * kz_integral
+        return _K_MEASURE * K * get_fancyJ(Rmin, Rmax, K) * kz_integral
     
     def get_model_est(Rmin, Rmax, pimax, b_gal, tau=1, PS_min = 10**-4, PS_max = 100):
         bar_wp = get_bar_wp(Rmin, Rmax)
@@ -524,12 +541,20 @@ def compute_auto_model(rel_e_measurement, wp_measurement, z = 0.8, rel_e_randoms
                  PS_min = 1e-4, PS_max = 2e2, PS_data = abacus_ps_nl, PS_z = 0.8, precomputed_kz_integral_paths = None, warning_handling='once'):
     '''
     Compute the II (multiplet-multiplet orientation autocorrelation) model prediction
-    at each bin of projected separation. This code assumes a tau value of 1.
+    at each bin of projected separation. This code assumes a tau value of 1: the prediction for a
+    given tau is tau**2 times the returned template (positive for tau != 0).
+
+    It models the '++' estimator of get_multiplet_autocorr / rel_angle_regions_binned(tracer_angles=...):
+    the pair average of cos(2 dtheta_A) cos(2 dtheta_B), both angles relative to the separation vector.
+    That is the ++ component only, <eps_+ eps_+> = (xi_+ + xi_-)/2, not cos 2(theta_A - theta_B) (= ++ + xx).
 
     Differs from compute_rel_e_model (gI cross-correlation) in three ways:
     1. No galaxy bias — uses P_mm directly (no b_gal factor)
     2. Squared tidal projection: (K²/k²)² instead of (K²/k²)
-    3. J_0 Bessel projection instead of J_2
+    3. (J_0 + J_4)/2 Bessel projection instead of J_2
+
+    Like the DR2 model, it omits the xi_g+^2 and (1 + xi_mm) pair-weighting terms of the pair-averaged
+    estimator (IA/parity/validation/norm_check/review/REPORT.md Sec. 3c).
 
     Precomputed kz integral splines must be generated with precompute_kz_integral_II(),
     which bakes in the squared tidal factor.
@@ -578,7 +603,7 @@ def compute_auto_model(rel_e_measurement, wp_measurement, z = 0.8, rel_e_randoms
         if pmi_key not in splines:
             print('Pimax value of', pmi_key ,'not found in pre-computed values. Use precompute_kz_integral_II() to generate first. Continuing with a pimax value of 30.0 Mpc/h')
             pmi_key = 30.0
-        front_constant = pimax / np.pi
+        front_constant = _LOS_PREFACTOR * pimax
         return front_constant * (interpolate.splev(np.log10(K), splines[pmi_key]))
 
     randoms = 0
@@ -604,14 +629,15 @@ def compute_auto_model(rel_e_measurement, wp_measurement, z = 0.8, rel_e_randoms
     def K_integrand(K, Rmin, Rmax, pimax):
         kz_integral = get_kz_integral_spl(K, pimax)
         fancyJ = (get_fancyJ_J0(Rmin, Rmax, K) + get_fancyJ_J4(Rmin, Rmax, K))
-        pair_factor = 2 # because my estimator is cos(2theta1) * cos(2theta2) and I DON'T divide by 2
-        return K * fancyJ * kz_integral * pair_factor
+        # (J0 + J4)/2 is the azimuthal average of cos^2(2 psi), not a pair-counting factor: the estimator
+        # counts each pair in both orders in its numerator and its denominator, which cancels.
+        return _K_MEASURE * K * fancyJ * kz_integral * _II_ANGULAR
 
     def get_model_est(Rmin, Rmax, pimax, tau=1, PS_min = 10**-4, PS_max = 100):
         bar_wp = get_bar_wp(Rmin, Rmax)
         K_integral = _quad_bessel_breaksum(K_integrand, PS_min, PS_max, Rmax=Rmax,
                                            args=(Rmin, Rmax, pimax))
-        return -tau * K_integral / (2*pimax + bar_wp)
+        return tau**2 * K_integral / (2*pimax + bar_wp)
 
     # computing the model prediction in each bin of projected separation
     model_estimates = []
