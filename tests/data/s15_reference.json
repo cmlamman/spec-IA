@@ -1,0 +1,175 @@
+{
+ "cases": {
+  "L24": {
+   "R_bin_min": [
+    5.000000000000001,
+    7.025579132418232,
+    9.871752429174101,
+    13.870955573360908,
+    19.490299204580957,
+    27.386127875258307,
+    38.48068170363041,
+    54.06981487565079,
+    75.97435261681775,
+    106.75276526873989
+   ],
+   "R_bin_max": [
+    7.025579132418232,
+    9.871752429174101,
+    13.870955573360908,
+    19.490299204580957,
+    27.386127875258307,
+    38.48068170363041,
+    54.06981487565079,
+    75.97435261681775,
+    106.75276526873989,
+    150.00000000000003
+   ],
+   "pimax": [
+    10.008526377472744,
+    11.63244385386411,
+    13.914236000845003,
+    17.120418259313954,
+    21.625475693279753,
+    27.955603192962904,
+    36.85016552642706,
+    49.348055830822844,
+    66.90903929518588,
+    91.58425508957998
+   ],
+   "unit_gp": [
+    3.354158686309497,
+    2.7097896180563605,
+    2.1363119731979605,
+    1.711942832103124,
+    1.3469604132611444,
+    1.0202088380361742,
+    0.7329277145094721,
+    0.49213468341385674,
+    0.2745961270470827,
+    0.18992138937239955
+   ],
+   "unit_pp": [
+    2.4822761279448224,
+    1.7349457135606845,
+    1.291758608978455,
+    0.9393345052921209,
+    0.6838925137842329,
+    0.4979064248769464,
+    0.357723401405617,
+    0.25053510144152097,
+    0.18995075728075875,
+    0.0951732995442215
+   ]
+  },
+  "const200": {
+   "R_bin_min": [
+    5.000000000000001,
+    7.025579132418232,
+    9.871752429174101,
+    13.870955573360908,
+    19.490299204580957,
+    27.386127875258307,
+    38.48068170363041,
+    54.06981487565079,
+    75.97435261681775,
+    106.75276526873989
+   ],
+   "R_bin_max": [
+    7.025579132418232,
+    9.871752429174101,
+    13.870955573360908,
+    19.490299204580957,
+    27.386127875258307,
+    38.48068170363041,
+    54.06981487565079,
+    75.97435261681775,
+    106.75276526873989,
+    150.00000000000003
+   ],
+   "pimax": [
+    200.0,
+    200.0,
+    200.0,
+    200.0,
+    200.0,
+    200.0,
+    200.0,
+    200.0,
+    200.0,
+    200.0
+   ],
+   "unit_gp": [
+    3.6989158768272805,
+    3.12177267017591,
+    2.582664058260125,
+    2.1511204791756042,
+    1.7395210501030094,
+    1.3373800875017823,
+    0.9630872573334633,
+    0.6374477046641268,
+    0.3689738122000455,
+    0.2338904718941652
+   ],
+   "unit_pp": [
+    4.719066424324292,
+    3.5181325093794573,
+    2.638597287618194,
+    1.8968330580731023,
+    1.3194784385841587,
+    0.8888097882208023,
+    0.5786498399913969,
+    0.36708985795544546,
+    0.23774250603937297,
+    0.11384795106260862
+   ]
+  }
+ },
+ "provenance": {
+  "generated": "2026-11-09T09:45:30",
+  "generator": "tests/data/make_s15_reference.py",
+  "spec_ia_commit_at_generation": "92b7e4b5e29c23db94a639e032c38916c9758035",
+  "note": "IA/parity/validation/norm_check is not under version control, so the check-2 generator has no commit; its files are identified by sha256 and mtime below. The values are the saved check-2 outputs; this generator re-ran external_refs.s15_unit and required agreement to 1e-10 before writing.",
+  "rerun_max_relative_deviation": 5.329070518200751e-15,
+  "source_npz": {
+   "path": "/global/homes/c/clamman/IA/parity/validation/norm_check/external/external_refs.npz",
+   "sha256": "6ad77e7d64cd47769192a00ae3727b03bdf0882c6d4ad46067b7e09c59f9e4a9",
+   "mtime": "2026-11-09T07:54:08",
+   "keys": "S15/{L24,const200}/unit_{gp,pp}"
+  },
+  "source_scripts": {
+   "external_refs.py": {
+    "path": "/global/homes/c/clamman/IA/parity/validation/norm_check/external/external_refs.py",
+    "sha256": "d9273e197ea6639dba11dc7ff5c768c1a2720e6d9f7b5e721e149c0c8a7ce43b",
+    "mtime": "2026-11-09T08:00:12"
+   },
+   "common.py": {
+    "path": "/global/homes/c/clamman/IA/parity/validation/norm_check/external/common.py",
+    "sha256": "3d2f7030e0e6025fe3ea8d65248092aa6de53575c8d0b7ac813bdfb57c46838d",
+    "mtime": "2026-11-09T07:40:56"
+   }
+  },
+  "check2_report": "/global/homes/c/clamman/IA/parity/validation/norm_check/external/report.md",
+  "power_spectrum": {
+   "file": "example_catalogs/AbacusSummit_base_c000_z0.800_power_nfft2048.csv",
+   "sha256": "96ad36ceae5a0826616f62e4a4fae4e4b4a1cb528c8487c55dc71f2ca7e307c9",
+   "last_commit": "5b3d899131e8c5859f9bb255be2d8204c0007442",
+   "used_as": "common.P_L24: cubic spline of log10 P vs log10 k through the file (s=0), the same function precompute_kz_integral builds; tabulated on 2,000,001 log-k points over 1e-5..10 h/Mpc inside s15_unit. It is zero outside ~[0.003, 3.5] h/Mpc."
+  },
+  "L24_bins": "R_bin_min/R_bin_max/pimax of the L24 (DR1) LRG multiplet measurement, read by common.l24_bins() from /pscratch/sd/c/clamman/MIA-Y1/LRG/LRG_groupAlignment_z0.4_1.1.fits; pimax = 6 + (2/3) R_mid",
+  "s15_settings": {
+   "dK": 0.00025,
+   "Kmax": 4.0,
+   "dkz": 0.0002,
+   "kzmax": 4.0,
+   "kzmin": 0.0
+  },
+  "s15_convergence": "check-2: halving dK and dk_z and raising Kmax/kzmax 4 -> 5 changes it by < 1e-6; OT20 Eq. 11 agrees to 1e-5",
+  "definitions": {
+   "unit_gp": "(1/pi^2) int dk_z int dK K^3/(k^2 k_z) P(k) sin(k_z Pi_max) Jbar_2(K), annulus averaged",
+   "unit_pp": "(1/pi^2) int dk_z int dK K (K^2/k^2)^2/k_z P(k) sin(k_z Pi_max) [Jbar_0 + Jbar_4]/2",
+   "E+ template (tau=1, b=1, wbar_p=0)": "-unit_gp / (2 pimax)",
+   "E++ template (tau=1, wbar_p=0)": "+unit_pp / (2 pimax)"
+  }
+ }
+}

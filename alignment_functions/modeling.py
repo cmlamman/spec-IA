@@ -25,17 +25,21 @@ import sys
 sys.path.append('/global/homes/c/clamman/IA/')
 
 import pathlib
-parent_path = pathlib.Path.cwd().parent
-if 'IA' not in str(parent_path):   # for working in other directories. May need to rename "IA" to wherever spec-IA is located.
-    parent_path = parent_path / 'IA'
-    print('Parent path is not the IA directory. Assuming parent directory is IA')
+# Locate the repo from this file, not from the working directory, so the module imports from anywhere
+# (e.g. from tests/). parent_path is the directory that contains spec-IA, as before.
+repo_path = pathlib.Path(__file__).resolve().parents[1]
+parent_path = repo_path.parent
 
 # reading in a file for the power spectrum
-ps_path = parent_path / 'spec-IA/example_catalogs/AbacusSummit_base_c000_z0.800_power_nfft2048.csv'
+ps_path = repo_path / 'example_catalogs/AbacusSummit_base_c000_z0.800_power_nfft2048.csv'
 abacus_ps_nl = pd.read_csv(ps_path) # nonlinear matter power spectrum from AbacusSummit
 
-kz_spline_parent_paths = parent_path / 'spec-IA/example_catalogs/kz_integral_splines/'
-kz_spline_paths = list(kz_spline_parent_paths.glob('*.npy')) # pre-computed values of the kz integral at given values of pimax, made with the above power spectum
+kz_spline_parent_paths = repo_path / 'example_catalogs/kz_integral_splines/'
+# k_z spline cache version (see load_kz_splines). Bump it whenever what a spline holds changes: the loader rejects
+# every other version, and only current-version files are picked up as defaults.
+KZ_SPLINE_VERSION = 2
+_KZ_TAG = 'kzv' + str(KZ_SPLINE_VERSION)
+kz_spline_paths = sorted(kz_spline_parent_paths.glob('kz_integral_NL_spl_' + _KZ_TAG + '_pimax_*.npz')) # pre-computed values of the kz integral at given values of pimax, made with the above power spectum
 
 
 #####################################################################################################
@@ -106,35 +110,207 @@ def get_relative_bias(z, wp, D_base, wp_base):
 #####################################################################################################
 # FUNCTION TO CONVERT BETWEEN TAU AND A_IA
 #####################################################################################################
-def tau_to_AIA(tau, z, norm_at_z0=False):
+# C1 rho_crit of the NLA literature (Joachimi+11 Sec. 4.1, Singh+15 Sec. 2.1). CCL and CosmoSIS use
+# 5e-14 h^-2 Msun Mpc^3 x rho_crit = 0.013877 instead; pass C1rho_crit=0.013877 to match them.
+C1_RHO_CRIT_STANDARD = 0.0134
+
+# AbacusSummit c000 (abacus.par of AbacusSummit_base_c000_ph000), the cosmology of the bundled P(k) abacus_ps_nl.
+# Omega_M includes the massive neutrino (omega_ncdm = 0.00064). No radiation, as in the NLA growth convention.
+cosmo_c000 = LambdaCDM(H0=67.36, Om0=0.315192, Ode0=0.684808)
+
+
+def growth_factor(z, cosmology):
     '''
-    convert from our tau parameter to the commonly used IA amplitude parameter A_IA.
-    If norm_at_z0 is False, this will be normalized so \bar{D}(z) = (1+z)D(z) is 1 at matter-dominated era (z=infinity).
-    If norma_at_z1 is True, this will be normalized so D(z) is 1 at present epoch (z=0).
+    Linear growth factor D(z) normalised to D(0) = 1, for an astropy LambdaCDM cosmology (w = -1, any curvature):
+    D(a) proportional to E(a) int_0^a da' / (a' E(a'))^3. Exact without radiation; if the cosmology has radiation
+    (Tcmb0 > 0) it is included in E and the result is approximate at the ~1e-4 level for z < 3.
     '''
-    C1 = 5*10**(-14) * ((u.Mpc)**3 / h**2) / M_sun
-    rho_m0 = cosmo.Om(z) * cosmo.critical_density0
-    AIA = - (tau / C1) * (D(z, norm_at_z0=norm_at_z0) / rho_m0)
-    return AIA.to(u.Mpc/u.Mpc).value
+    w = np.atleast_1d(cosmology.w(np.array([0.0, 1.0, 3.0])))
+    if not np.allclose(w, -1.0):
+        raise NotImplementedError('growth_factor() is only implemented for w = -1 (LambdaCDM) cosmologies')
+
+    def unnormalised(a):
+        integral = scipy.integrate.quad(lambda x: 1 / (x * cosmology.efunc(1/x - 1))**3, 0, a,
+                                        epsabs=0, epsrel=1e-11, limit=500)[0]
+        return cosmology.efunc(1/a - 1) * integral
+
+    zz = np.atleast_1d(np.asarray(z, dtype=float))
+    out = np.array([unnormalised(1 / (1 + zi)) for zi in zz]) / unnormalised(1.0)
+    return out.reshape(np.shape(z)) if np.ndim(z) else float(out[0])
+
+
+def tau_to_AIA(tau, z, convention='standard', cosmology=None, C1rho_crit=None, norm_at_z0=None):
+    '''
+    Convert our tau parameter (L24 Eq. 6, tau < 0 for radial alignment) to the NLA amplitude A_IA (> 0 for radial).
+
+    convention='standard' (default): A_IA = -tau D(z) / (C1rho_crit Omega_m,0), with D(0) = 1.
+        This is the NLA convention of CCL, CosmoSIS, Joachimi+11, Singh+15 and Siegel+25 (parity draft Eq. 44).
+        cosmology (required): the astropy cosmology of the P(k) used in the model (e.g. cosmo_c000 for the bundled
+            AbacusSummit P(k)); Omega_m,0 = cosmology.Om0 and D(z) = growth_factor(z, cosmology).
+        C1rho_crit: default C1_RHO_CRIT_STANDARD = 0.0134; pass 0.013877 to match CCL/CosmoSIS exactly.
+    convention='L24': the conversion published in Lamman et al. 2024 (Eq. 17), for back-compatibility only.
+        A_IA = -tau D(z) / (C1 rho_crit,0 Omega_m(z)) in this module's LambdaCDM(69.6, 0.286) cosmology, with
+        C1 = 5e-14 h^-2 Msun^-1 Mpc^3 (C1 rho_crit = 0.01388) and D = D(z, norm_at_z0):
+        norm_at_z0=False (default, as in L24) normalises (1+z)D to 1 in matter domination; norm_at_z0=True (as used
+        for the DR2 A_IA column) normalises D(0) = 1. It takes no cosmology or C1rho_crit.
+        At z = 0.8 its A_IA is 2.94x lower than the standard one with c000: 1.036 (C1 rho_crit) x 2.22
+        (Omega_m(z) of the 0.286 cosmology vs Omega_m,0 of c000) x 1.28 (growth normalisation).
+    '''
+    if convention == 'standard':
+        if norm_at_z0 is not None:
+            raise ValueError('norm_at_z0 only applies to convention="L24"; the standard convention has D(0) = 1')
+        if cosmology is None:
+            raise ValueError('convention="standard" needs cosmology=: the cosmology of the P(k) used in the model '
+                             '(e.g. cosmo_c000 for the bundled AbacusSummit P(k)). Use convention="L24" for the old conversion.')
+        C1rho = C1_RHO_CRIT_STANDARD if C1rho_crit is None else C1rho_crit
+        return -np.asarray(tau, dtype=float) * growth_factor(z, cosmology) / (C1rho * cosmology.Om0)
+    elif convention == 'L24':
+        if cosmology is not None or C1rho_crit is not None:
+            raise ValueError('convention="L24" reproduces the published conversion, with its own fixed cosmology '
+                             'and C1; it takes no cosmology or C1rho_crit')
+        C1 = 5*10**(-14) * ((u.Mpc)**3 / h**2) / M_sun
+        rho_m0 = cosmo.Om(z) * cosmo.critical_density0
+        AIA = - (tau / C1) * (D(z, norm_at_z0=bool(norm_at_z0)) / rho_m0)
+        return AIA.to(u.Mpc/u.Mpc).value
+    else:
+        raise ValueError('convention must be "standard" or "L24", got ' + repr(convention))
+
+
+def AIA_to_tau(A_IA, z, convention='standard', cosmology=None, C1rho_crit=None, norm_at_z0=None):
+    '''Inverse of tau_to_AIA, with the same arguments and conventions.'''
+    return np.asarray(A_IA, dtype=float) / tau_to_AIA(1.0, z, convention=convention, cosmology=cosmology,
+                                                         C1rho_crit=C1rho_crit, norm_at_z0=norm_at_z0)
 
 
 #####################################################################################################
 # FUNCTION TO CALCULATE MODEL PREDICTION FOR GIVEN MEASUREMENT OF RELATIVE PROJECTED ELLIPTICITY
 #####################################################################################################
 
+# Normalization of the projected models, shared by compute_rel_e_model, get_rel_e_model and compute_auto_model.
+# For a bin [Rmin, Rmax) with |Pi| < Pi_max, and tracers delta_g = b delta (L24 Eqs. 4-6):
+#
+#   E+  = -tau b/(2 Pi_max + wbar_p) int K dK/(2 pi) Jbar_2(K) W(K)
+#   E++ = tau^2 /(2 Pi_max + wbar_p) int K dK/(2 pi) (1/2)[Jbar_0(K) + Jbar_4(K)] W_II(K)
+#   W(K) = int_{-inf}^{inf} dk_z/(2 pi) (K^2/k^2)^n P(k) 2 sin(k_z Pi_max)/k_z
+#        = (2 Pi_max/pi) int_0^inf dk_z (K^2/k^2)^n P(k) sinc(k_z Pi_max)          (n = 1 for E+, 2 for E++)
+#
+# The k_z splines (precompute_kz_integral*) hold int_0^inf dk_z (K^2/k^2)^n P sinc(k_z Pi_max), so:
+_K_MEASURE = 1 / (2*np.pi)    # d^2K/(2 pi)^2 after the azimuthal integral: K dK/(2 pi). Was 1 (model 2 pi too high).
+_LOS_PREFACTOR = 2 / np.pi    # W = (2 Pi_max/pi) x spline: the spline is k_z > 0 only. Was 1/pi (model 2x too low).
+_II_ANGULAR = 0.5             # E++ measures cos 2dtheta_A cos 2dtheta_B (the ++ component only); its azimuthal
+                              # average is <cos^2 2psi e^{iKR cos psi}> -> (J0 + J4)/2. Was 2 ("pair_factor").
+# Checked against Singh+15 Eq. 9 / Okumura & Taruya 2020 Eq. 11 (finite Pi_max) and Joachimi+11 / CCL / CosmoSIS:
+# see tests/test_normalization.py and IA/parity/validation/norm_check/. The models before this fix were
+# pi x (E+) and -4 pi x (E++) these expressions.
 
-def precompute_kz_integral(pimax_values, PS_data, directory, PS_min = 1e-4, PS_max = 2e2, n_samples=100, warning_handling='once', pi_weighting=False, gauss_params=None, pimax_rp=None, overwrite=True):
+
+# k_z spline cache. Splines are .npz archives of plain arrays (read with allow_pickle=False, so they are portable
+# across numpy versions), tagged with KZ_SPLINE_VERSION in both the file name and the contents.
+# Version history:
+#   1 (unversioned: a pickled tck in a file named *.npy) -- k_z integral from PS_min = 1e-4 instead of 0, which
+#     loses 0.07-1.3% of the signal (growing with Pi_max); default n_samples = 100 (1-2% bin-to-bin scatter).
+#   2 -- k_z integral from 0; default n_samples = 1000; metadata stored with the spline.
+KZ_SPLINE_FORMAT = 'spec-IA kz spline'
+_KZ_PREFIX = {'gI': 'kz_integral_NL_spl', 'II': 'kz_integral_II_NL_spl'}
+
+
+def kz_spline_filename(pimax, kind='gI'):
+    '''File name (without directory) of the current-version k_z spline for this Pi_max.
+    kind: 'gI' (precompute_kz_integral; used by compute_rel_e_model and get_rel_e_model) or
+          'II' (precompute_kz_integral_II; used by compute_auto_model).'''
+    return _KZ_PREFIX[kind] + '_' + _KZ_TAG + '_pimax_' + str(round(float(pimax), 2)) + '.npz'
+
+
+def _pk_digest(PS_data):
+    '''sha256 of the P(k) table a spline was made from (stored for provenance; not checked on load).'''
+    import hashlib
+    digest = hashlib.sha256()
+    for col in ('k', 'P'):
+        digest.update(np.ascontiguousarray(np.asarray(PS_data[col], dtype=np.float64)).tobytes())
+    return digest.hexdigest()
+
+
+def _now_iso():
+    import datetime
+    return datetime.datetime.now().isoformat(timespec='seconds')
+
+
+def _save_kz_spline(path, tck, kind, pimax, **meta):
+    '''Write one spline. meta values must be str, int, float or numeric arrays (nothing that needs pickle).'''
+    t, c, k = tck
+    np.savez(path, format=KZ_SPLINE_FORMAT, version=KZ_SPLINE_VERSION, kind=kind, pimax=float(pimax),
+             t=np.asarray(t, float), c=np.asarray(c, float), k=int(k), **meta)
+
+
+def _read_kz_spline(path):
+    '''Return (kind, pimax, tck) for a current-version spline file, or None for anything else
+    (legacy pickled splines, other versions, files that are not splines).'''
+    try:
+        data = np.load(path, allow_pickle=False)
+    except Exception:              # legacy pickles raise here (allow_pickle=False); so do unreadable files
+        return None
+    if not isinstance(data, np.lib.npyio.NpzFile):
+        return None
+    with data:
+        if 'format' not in data.files or str(data['format']) != KZ_SPLINE_FORMAT:
+            return None
+        if int(data['version']) != KZ_SPLINE_VERSION:
+            return None
+        return str(data['kind']), float(data['pimax']), (data['t'].copy(), data['c'].copy(), int(data['k']))
+
+
+def load_kz_splines(paths, kind='gI'):
+    '''
+    Read k_z splines written by precompute_kz_integral (kind='gI') or precompute_kz_integral_II (kind='II').
+    Returns {round(Pi_max, 2): tck}.
+
+    Raises ValueError, rather than skipping files, if any path is not a current-version (KZ_SPLINE_VERSION) spline
+    of this kind. In particular, splines made before the 2026-11 normalization fix (files named *_pimax_*.npy)
+    are always rejected: they start the k_z integral at 1e-4 and use the old K sampling. Regenerate them.
+    '''
+    paths = [str(p) for p in paths]
+    if len(paths) == 0:
+        raise ValueError('No k_z spline files were given. Generate them with precompute_kz_integral() (E+) or '
+                         'precompute_kz_integral_II() (E++) and pass their paths (named "*_' + _KZ_TAG + '_pimax_*.npz").')
+    splines, stale, wrong_kind = {}, [], []
+    for path in paths:
+        content = _read_kz_spline(path)
+        if content is None:
+            stale.append(path)
+        elif content[0] != kind:
+            wrong_kind.append(path + ' (kind ' + repr(content[0]) + ')')
+        else:
+            splines[round(content[1], 2)] = content[2]
+    if stale:
+        maker = 'precompute_kz_integral_II()' if kind == 'II' else 'precompute_kz_integral()'
+        raise ValueError(str(len(stale)) + ' file(s) are not version-' + str(KZ_SPLINE_VERSION) + ' k_z splines and '
+                         'cannot be used. Splines from before the 2026-11 normalization fix (*_pimax_*.npy) integrate '
+                         'k_z from 1e-4 with the old sampling; regenerate them with ' + maker + ' and pass only files '
+                         'named "*_' + _KZ_TAG + '_pimax_*.npz". First file(s): ' + ', '.join(stale[:3]))
+    if wrong_kind:
+        raise ValueError('Expected ' + repr(kind) + ' k_z splines ("gI" from precompute_kz_integral for the E+ models, '
+                         '"II" from precompute_kz_integral_II for compute_auto_model), got: ' + ', '.join(wrong_kind[:3]))
+    return splines
+
+
+def precompute_kz_integral(pimax_values, PS_data, directory, PS_min = 1e-4, PS_max = 2e2, n_samples=1000, warning_handling='once', pi_weighting=False, gauss_params=None, pimax_rp=None, overwrite=True):
     '''
     Precompute the integral of the kz integral and save a spline as a function of K (in log space)
     This is used to speed up the calculation of rel_e_to_tau.
+
+    The spline holds int_0^PS_max dk_z P(k) (K^2/k^2) sinc(k_z Pi_max), k^2 = K^2 + k_z^2, from k_z = 0 exactly:
+    the integrand is finite there (sinc -> 1, K^2/k^2 -> 1). Before version 2 it started at PS_min = 1e-4,
+    which lost a fraction ~2 Pi_max 1e-4/pi of the signal (0.07-1.3%).
+    Files are written as kz_spline_filename(pimax, 'gI') (version KZ_SPLINE_VERSION) in directory.
     
     INPUT:
     ------------------
     pimax_values: array of shape (n,). Line-of-sight distance 
     PS_data: dictonary or DataFrame of matter power spectrum values. Must contain columns 'k' and 'P'. Default is a non-linear matter power spectrum from AbacusSummit.
     directory: string. Directory path to save the spline files.
-    PS_min, PS_max: floats. Range of k to use for the power spectrum [h/Mpc]
-    n_samples: int. Number of samples to use for the spline. For a better integration, this function will add a few more to better sample where sincx = 0
+    PS_min, PS_max: floats. Range of K for the log-spaced spline nodes [h/Mpc]; PS_max is also the upper limit of the k_z integral.
+    n_samples: int. Number of log-spaced K nodes in [PS_min, PS_max]. For a better integration, this function will add a few more to better sample where sincx = 0
+               1000 converges the model to ~3e-4 per bin (100, the old default, gave 1-2% bin-to-bin scatter). Cost: ~45 ms per node per Pi_max.
     gauss_params: array of shape (2n,). Parameters for the gaussian fit. If pi_weighting = True, this is the parameters for the gaussian fit to the 2D correlation function.
                   will use parameters as sigma1, width1, sigma2, width2, etc.
     RETURNS:
@@ -142,13 +318,16 @@ def precompute_kz_integral(pimax_values, PS_data, directory, PS_min = 1e-4, PS_m
     None. Saves the spline files in the directory.
     '''
     
+    if pi_weighting == True:
+        n_gaussians = int(len(gauss_params) / 2)
+        weighted_name = 'kz_integral_NL_spl_' + _KZ_TAG + '_Wpimaxrp_' + str(n_gaussians) + 'D_' + str(pimax_rp) + '.npz'
     if overwrite == False:
         if pi_weighting == False:
-            if all([os.path.exists(directory+'/kz_integral_NL_spl_pimax_'+str(round(float(pmi), 2))+'.npy') for pmi in pimax_values]):
+            if all([os.path.exists(os.path.join(directory, kz_spline_filename(pmi, 'gI'))) for pmi in pimax_values]):
                 print('All files exist. Skipping')
                 return None
         else:
-            if os.path.exists(directory+'/kz_integral_NL_spl_Wpimaxrp_'+str(pimax_rp)+'.pkl'):
+            if os.path.exists(os.path.join(directory, weighted_name)):
                 print('File exists. Skipping')
                 return None
     
@@ -167,7 +346,6 @@ def precompute_kz_integral(pimax_values, PS_data, directory, PS_min = 1e-4, PS_m
             sinc_value = scipy.special.sinc( (kz * pimax) / np.pi )  # THIS SCIPY SINC INCLUDES PI NORMALIZATION > MUST DIVIDE BY PI
             return get_PS(np.sqrt(k_squared)) * (K**2 / k_squared) * sinc_value
     else:
-        n_gaussians = int(len(gauss_params) / 2)
         if n_gaussians == 1:
             def kz_integrand(kz, K):
                 k_squared = kz**2 + K**2
@@ -191,43 +369,46 @@ def precompute_kz_integral(pimax_values, PS_data, directory, PS_min = 1e-4, PS_m
         Ks_extra_values = (np.arange(0, n_pi_steps) * np.pi * max_pi/(3*n_pi_steps)) + float(int(min_pi/np.pi))*np.pi
         Ks_sample_values = np.sort(np.concatenate((Ks_sample_values, Ks_extra_values)))
     
+    meta = dict(kz_min=0.0, kz_max=float(PS_max), K_min=float(PS_min), K_max=float(PS_max), n_samples=int(n_samples),
+                n_extra_K_nodes=int(len(Ks_sample_values) - n_samples), pk_sha256=_pk_digest(PS_data),
+                created=_now_iso())
     if pi_weighting == False:
         for pmi in pimax_values:
             kz_integral_values = []
             for K in Ks_sample_values:
-                kz_integral_values.append(_quad(kz_integrand, a=PS_min, b=PS_max, args=(K, pmi))) # integrate over kz
+                kz_integral_values.append(_quad(kz_integrand, a=0.0, b=PS_max, args=(K, pmi))) # integrate over kz from 0
             tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=0)
             
             # save the spline (round pimax to 2 decimal places in filename)
             pmi_rounded = round(float(pmi), 2)
             print('saving for pimax =', pmi_rounded)
-            with open(directory+'/kz_integral_NL_spl_pimax_'+str(pmi_rounded)+'.npy', 'wb') as f:
-                pickle.dump(tck_kz_integral, f)
+            _save_kz_spline(os.path.join(directory, kz_spline_filename(pmi, 'gI')), tck_kz_integral, 'gI', pmi, **meta)
     
     else:
         kz_integral_values = []
         for K in Ks_sample_values:
-            value = _quad(kz_integrand, a=PS_min, b=PS_max, args=(K,))
+            value = _quad(kz_integrand, a=0.0, b=PS_max, args=(K,))
             kz_integral_values.append(value) # integrate over kz
         tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=0)
         print('saving pimax-weighted values for rp =', pimax_rp)
-        with open(directory+'/kz_integral_NL_spl_Wpimaxrp_'+str(n_gaussians)+'D_'+str(pimax_rp)+'.pkl', 'wb') as f:
-            pickle.dump(tck_kz_integral, f)
+        _save_kz_spline(os.path.join(directory, weighted_name), tck_kz_integral, 'gI_W' + str(n_gaussians) + 'D',
+                        np.nan, gauss_params=np.asarray(gauss_params, float), pimax_rp=str(pimax_rp), **meta)
     print('Finished')
     return None
 
-def precompute_kz_integral_II(pimax_values, PS_data, directory, PS_min = 1e-4, PS_max = 2e2, n_samples=100, warning_handling='once', overwrite=True):
+def precompute_kz_integral_II(pimax_values, PS_data, directory, PS_min = 1e-4, PS_max = 2e2, n_samples=1000, warning_handling='once', overwrite=True):
     '''
     Precompute the kz integral for the II (orientation autocorrelation) model.
     Same as precompute_kz_integral but with squared tidal projection factor (K²/k²)².
+    The k_z integral starts at 0 (see precompute_kz_integral). Files are written as kz_spline_filename(pimax, 'II').
 
     INPUT:
     ------------------
     pimax_values: array of shape (n,). Line-of-sight distance
     PS_data: dictionary or DataFrame of matter power spectrum values. Must contain columns 'k' and 'P'.
     directory: string. Directory path to save the spline files.
-    PS_min, PS_max: floats. Range of k to use for the power spectrum [h/Mpc]
-    n_samples: int. Number of samples to use for the spline.
+    PS_min, PS_max: floats. Range of K for the log-spaced spline nodes [h/Mpc]; PS_max is also the upper limit of the k_z integral.
+    n_samples: int. Number of log-spaced K nodes (1000 converges; the old default of 100 gave 1-3% bin-to-bin scatter).
 
     RETURNS:
     ------------------
@@ -235,7 +416,7 @@ def precompute_kz_integral_II(pimax_values, PS_data, directory, PS_min = 1e-4, P
     '''
 
     if overwrite == False:
-        if all([os.path.exists(directory+'/kz_integral_II_NL_spl_pimax_'+str(round(float(pmi), 2))+'.npy') for pmi in pimax_values]):
+        if all([os.path.exists(os.path.join(directory, kz_spline_filename(pmi, 'II'))) for pmi in pimax_values]):
             print('All files exist. Skipping')
             return None
 
@@ -259,16 +440,18 @@ def precompute_kz_integral_II(pimax_values, PS_data, directory, PS_min = 1e-4, P
     Ks_extra_values = (np.arange(0, n_pi_steps) * np.pi * max_pi/(3*n_pi_steps)) + float(int(min_pi/np.pi))*np.pi
     Ks_sample_values = np.sort(np.concatenate((Ks_sample_values, Ks_extra_values)))
 
+    meta = dict(kz_min=0.0, kz_max=float(PS_max), K_min=float(PS_min), K_max=float(PS_max), n_samples=int(n_samples),
+                n_extra_K_nodes=int(len(Ks_sample_values) - n_samples), pk_sha256=_pk_digest(PS_data),
+                created=_now_iso())
     for pmi in pimax_values:
         kz_integral_values = []
         for K in Ks_sample_values:
-            kz_integral_values.append(_quad(kz_integrand, a=PS_min, b=PS_max, args=(K, pmi)))
+            kz_integral_values.append(_quad(kz_integrand, a=0.0, b=PS_max, args=(K, pmi)))   # from k_z = 0
         tck_kz_integral = interpolate.splrep(np.log10(Ks_sample_values), kz_integral_values, s=0)
 
         pmi_rounded = round(float(pmi), 2)
         print('saving II for pimax =', pmi_rounded)
-        with open(directory+'/kz_integral_II_NL_spl_pimax_'+str(pmi_rounded)+'.npy', 'wb') as f:
-            pickle.dump(tck_kz_integral, f)
+        _save_kz_spline(os.path.join(directory, kz_spline_filename(pmi, 'II')), tck_kz_integral, 'II', pmi, **meta)
 
     print('Finished')
     return None
@@ -376,19 +559,15 @@ def compute_rel_e_model(rel_e_measurement, wp_measurement, pimax_values, b_gal, 
         D_norm = (D(z) / D(PS_z))**2
 
         
-    # read in the pre-computed value of the kz integral (made with precompute_kz_integral)
-    splines = {}
-    for path in precomputed_kz_integral_paths:
-        pmi_str = path.split('_')[-1].split('.npy')[0]
-        pmi_key = round(float(pmi_str), 2)
-        splines[pmi_key] = np.load(path, allow_pickle=True)
+    # read in the pre-computed value of the kz integral (made with precompute_kz_integral; older versions are rejected)
+    splines = load_kz_splines(precomputed_kz_integral_paths, kind='gI')
 
     def get_kz_integral_spl(K, pimax, b_gal):
         pmi_key = round(float(pimax), 2)
         if pmi_key not in splines:
             print('Pimax value of', pmi_key,'not found in pre-computed values. Use precompute_kz_integral() to generate first. Continuing with a pimax value of 30.0 Mpc/h')
             pmi_key = 30.0
-        front_constant = b_gal * pimax / np.pi
+        front_constant = _LOS_PREFACTOR * b_gal * pimax
         return front_constant * (interpolate.splev(np.log10(K), splines[pmi_key]))
     
     randoms = 0
@@ -415,7 +594,7 @@ def compute_rel_e_model(rel_e_measurement, wp_measurement, pimax_values, b_gal, 
     
     def K_integrand(K, Rmin, Rmax, pimax, b_gal):
         kz_integral = get_kz_integral_spl(K, pimax, b_gal)
-        return K * get_fancyJ(Rmin, Rmax, K) * kz_integral
+        return _K_MEASURE * K * get_fancyJ(Rmin, Rmax, K) * kz_integral
     
     def get_model_est(Rmin, Rmax, pimax, b_gal, tau=1, PS_min = 10**-4, PS_max = 100):
         bar_wp = get_bar_wp(Rmin, Rmax)
@@ -470,20 +649,15 @@ def get_rel_e_model(R_bin_min, R_bin_max, pimax_values, wp_values, b_gal, z = 0.
         D_norm = (D(z) / D(PS_z))**2
 
         
-    # read in the pre-computed value of the kz integral (made with precompute_kz_integral)
-    splines = {}
-    for path in precomputed_kz_integral_paths:
-        pmi_str = path.split('_')[-1].split('.npy')[0]
-        pmi_key = round(float(pmi_str), 2)
-        with open(path, 'rb') as f:
-            splines[pmi_key] = pickle.load(f)
+    # read in the pre-computed value of the kz integral (made with precompute_kz_integral; older versions are rejected)
+    splines = load_kz_splines(precomputed_kz_integral_paths, kind='gI')
 
     def get_kz_integral_spl(K, pimax, b_gal):
         pmi_key = round(float(pimax), 2)
         if pmi_key not in splines:
             print('Pimax value of', pmi_key, 'not found in pre-computed values. Use precompute_kz_integral() to generate first. Continuing with a pimax value of 30.0 Mpc/h')
             pmi_key = 30.0
-        front_constant = b_gal * pimax / np.pi
+        front_constant = _LOS_PREFACTOR * b_gal * pimax
         return front_constant * (interpolate.splev(np.log10(K), splines[pmi_key]))
         
     R_bin_centers = (R_bin_min+R_bin_max)/2
@@ -502,7 +676,7 @@ def get_rel_e_model(R_bin_min, R_bin_max, pimax_values, wp_values, b_gal, z = 0.
     
     def K_integrand(K, Rmin, Rmax, pimax, b_gal):
         kz_integral = get_kz_integral_spl(K, pimax, b_gal)
-        return K * get_fancyJ(Rmin, Rmax, K) * kz_integral
+        return _K_MEASURE * K * get_fancyJ(Rmin, Rmax, K) * kz_integral
     
     def get_model_est(Rmin, Rmax, pimax, b_gal, tau=1, PS_min = 10**-4, PS_max = 100):
         bar_wp = get_bar_wp(Rmin, Rmax)
@@ -524,12 +698,20 @@ def compute_auto_model(rel_e_measurement, wp_measurement, z = 0.8, rel_e_randoms
                  PS_min = 1e-4, PS_max = 2e2, PS_data = abacus_ps_nl, PS_z = 0.8, precomputed_kz_integral_paths = None, warning_handling='once'):
     '''
     Compute the II (multiplet-multiplet orientation autocorrelation) model prediction
-    at each bin of projected separation. This code assumes a tau value of 1.
+    at each bin of projected separation. This code assumes a tau value of 1: the prediction for a
+    given tau is tau**2 times the returned template (positive for tau != 0).
+
+    It models the '++' estimator of get_multiplet_autocorr / rel_angle_regions_binned(tracer_angles=...):
+    the pair average of cos(2 dtheta_A) cos(2 dtheta_B), both angles relative to the separation vector.
+    That is the ++ component only, <eps_+ eps_+> = (xi_+ + xi_-)/2, not cos 2(theta_A - theta_B) (= ++ + xx).
 
     Differs from compute_rel_e_model (gI cross-correlation) in three ways:
     1. No galaxy bias — uses P_mm directly (no b_gal factor)
     2. Squared tidal projection: (K²/k²)² instead of (K²/k²)
-    3. J_0 Bessel projection instead of J_2
+    3. (J_0 + J_4)/2 Bessel projection instead of J_2
+
+    Like the DR2 model, it omits the xi_g+^2 and (1 + xi_mm) pair-weighting terms of the pair-averaged
+    estimator (IA/parity/validation/norm_check/review/REPORT.md Sec. 3c).
 
     Precomputed kz integral splines must be generated with precompute_kz_integral_II(),
     which bakes in the squared tidal factor.
@@ -566,19 +748,15 @@ def compute_auto_model(rel_e_measurement, wp_measurement, z = 0.8, rel_e_randoms
         D_norm = (D(z) / D(PS_z))**2
 
 
-    # read in the pre-computed value of the kz integral (made with precompute_kz_integral_II)
-    splines = {}
-    for path in precomputed_kz_integral_paths:
-        pmi_str = path.split('_')[-1].split('.npy')[0]
-        pmi_key = round(float(pmi_str), 2)
-        splines[pmi_key] = np.load(path, allow_pickle=True)
+    # read in the pre-computed value of the kz integral (made with precompute_kz_integral_II; older versions are rejected)
+    splines = load_kz_splines(precomputed_kz_integral_paths, kind='II')
 
     def get_kz_integral_spl(K, pimax):
         pmi_key = round(float(pimax), 2)
         if pmi_key not in splines:
             print('Pimax value of', pmi_key ,'not found in pre-computed values. Use precompute_kz_integral_II() to generate first. Continuing with a pimax value of 30.0 Mpc/h')
             pmi_key = 30.0
-        front_constant = pimax / np.pi
+        front_constant = _LOS_PREFACTOR * pimax
         return front_constant * (interpolate.splev(np.log10(K), splines[pmi_key]))
 
     randoms = 0
@@ -604,14 +782,15 @@ def compute_auto_model(rel_e_measurement, wp_measurement, z = 0.8, rel_e_randoms
     def K_integrand(K, Rmin, Rmax, pimax):
         kz_integral = get_kz_integral_spl(K, pimax)
         fancyJ = (get_fancyJ_J0(Rmin, Rmax, K) + get_fancyJ_J4(Rmin, Rmax, K))
-        pair_factor = 2 # because my estimator is cos(2theta1) * cos(2theta2) and I DON'T divide by 2
-        return K * fancyJ * kz_integral * pair_factor
+        # (J0 + J4)/2 is the azimuthal average of cos^2(2 psi), not a pair-counting factor: the estimator
+        # counts each pair in both orders in its numerator and its denominator, which cancels.
+        return _K_MEASURE * K * fancyJ * kz_integral * _II_ANGULAR
 
     def get_model_est(Rmin, Rmax, pimax, tau=1, PS_min = 10**-4, PS_max = 100):
         bar_wp = get_bar_wp(Rmin, Rmax)
         K_integral = _quad_bessel_breaksum(K_integrand, PS_min, PS_max, Rmax=Rmax,
                                            args=(Rmin, Rmax, pimax))
-        return -tau * K_integral / (2*pimax + bar_wp)
+        return tau**2 * K_integral / (2*pimax + bar_wp)
 
     # computing the model prediction in each bin of projected separation
     model_estimates = []
