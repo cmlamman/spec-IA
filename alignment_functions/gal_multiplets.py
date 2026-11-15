@@ -65,8 +65,8 @@ def find_components(line_iterator, max_size):
     # return list of integers
     return list(result.values())
 
-def find_groups_UnionFind(points, max_n=10, transverse_max=0.5, los_max=6, transverse_min=None,
-                          los_location=None, los_mode='radial', los_axis=None):
+def find_groups_UnionFind(points, max_n=10, transverse_max=0.5, los_max=6, transverse_min=None, los_min=None,
+                          los_location=None, los_mode='radial', los_axis=None): # added los_min
     '''
     Find groups of nearby points using a Union-Find on pairs within a transverse/LOS distance cut.
     Pair separations are split into transverse and LOS parts by los_pair_separations().
@@ -74,6 +74,10 @@ def find_groups_UnionFind(points, max_n=10, transverse_max=0.5, los_max=6, trans
     los_mode, los_location, los_axis: line of sight, see resolve_los() in coordinate_functions.
         'radial' (default; LOS from the observer at los_location, default the origin) or
         'axis' (LOS along los_axis = 'x', 'y' or 'z'; los_mode='z' is shorthand for los_axis='z').
+    transverse_min, los_min (optional): minimum linking lengths. With both given, a link is removed only if it is
+        closer than the minimum in both directions (transverse < transverse_min AND LOS < los_min), so linking-length
+        bins such as 0-0.5, 0.5-1, 1-2 nest without overlapping. With only one given, links below that minimum are
+        removed regardless of the other separation (original behavior for transverse_min).
     points is not modified.
     '''
     los = resolve_los(los_mode, los_location, los_axis)
@@ -89,9 +93,13 @@ def find_groups_UnionFind(points, max_n=10, transverse_max=0.5, los_max=6, trans
     transverse_seps = np.abs(transverse_seps)
     los_seps = np.abs(los_seps)
 
-    to_remove = (transverse_seps > transverse_max) | (los_seps > los_max)
-    if transverse_min is not None:
-        to_remove |= (transverse_seps < transverse_min)
+    to_remove = (transverse_seps > transverse_max) | (los_seps > los_max)        # outside the outer box
+    if transverse_min is not None and los_min is not None:
+        to_remove |= (transverse_seps < transverse_min) & (los_seps < los_min)   # inside the inner box
+    elif transverse_min is not None:
+        to_remove |= (transverse_seps < transverse_min)                           # original behavior
+    elif los_min is not None:
+        to_remove |= (los_seps < los_min)                                         # LOS minimum only
 
     ii = ii[~to_remove]
 
@@ -192,8 +200,8 @@ def trim_groups(points, group_indices, transverse_max, los_max):
 
 
 def make_group_catalog(data_catalog, comoving_points=None, transverse_max=1, los_max=6,
-                       max_n=100, cosmology=cosmo, transverse_min=None, truez=False,
-                       use_sky_coords=True, los_location=None, los_mode='radial', los_axis=None):
+                       max_n=100, cosmology=cosmo, transverse_min=None, los_min=None, truez=False,
+                       use_sky_coords=True, los_location=None, los_mode='radial', los_axis=None): # added los_min
     '''
     Find pairs of galaxies, group them, and return a catalog of group properties.
 
@@ -201,7 +209,7 @@ def make_group_catalog(data_catalog, comoving_points=None, transverse_max=1, los
         their shapes; see resolve_los() in coordinate_functions.
         'radial' (default; LOS from the observer at los_location, default the origin, to each multiplet) or
         'axis' (LOS along los_axis = 'x', 'y' or 'z'; los_mode='z' is shorthand for los_axis='z').
-
+    transverse_min, los_min (optional): minimum linking lengths, passed to find_groups_UnionFind.
     Returns
     -------
     group_table: astropy table with columns 'center_loc', 'orientation', 'n_group',
@@ -213,7 +221,7 @@ def make_group_catalog(data_catalog, comoving_points=None, transverse_max=1, los
 
     group_indices = find_groups_UnionFind(comoving_points, max_n=max_n,
                                           transverse_max=transverse_max, los_max=los_max,
-                                          transverse_min=transverse_min, **los)
+                                          transverse_min=transverse_min, los_min=los_min, **los)
 
     if truez:
         comoving_points = get_cosmo_points(data_catalog, cosmology=cosmology, truez=truez)
@@ -693,7 +701,8 @@ def _process_one_3D_batch(batch_index, group_batch_center_loc, group_batch_orien
 
 def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), np.log10(100), 16), pimax='variable', transverse_max = 1, los_max=1, print_info=True, sim_label='example',
                    periodic_boundary=False, n_batches = 10, save_intermediate=False, save_info=False,
-                   return_pair_counts=False, n_jobs=1, los_mode=None, los_location=None, los_axis=None, box_size=None, multiplet_catalog=None, n_group_min=2, n_group_max=None):
+                   return_pair_counts=False, n_jobs=1, los_mode=None, los_location=None, los_axis=None, box_size=None, multiplet_catalog=None, n_group_min=2, n_group_max=None,
+                   transverse_min=None, los_min=None): # added transverse_min and los_min
     # added argument for multiplet_catalog
     '''
     A high-level function to calculate projected multiplet alignment for a set of points in 3D comoving space.
@@ -729,6 +738,10 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
                 linking lengths. If None (default), multiplets are found here.                                    
         n_group_min, n_group_max (optional): keep only multiplets with n_group_min <= n_group <= n_group_max.       
                 Defaults (2, None) keep all multiplets. Pairs: (2, 2), triplets: (3, 3), quadruplets+: (4, None). 
+        transverse_min, los_min (optional): minimum linking lengths, passed to make_group_catalog (used only when
+                multiplet_catalog is None). When given, the linking lengths are added to the file names
+                (_link_t<min>-<max>_l<min>-<max>), the config hash, and the table header (TMIN, TMAX, LMIN, LMAX).
+                With both None, results and file names are unchanged.
 
     Returns:
     Astropy table with columns:
@@ -775,7 +788,9 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
         print('Finding multiplets')
     
     if multiplet_catalog is None:   # find multiplets as before, or reuse a catalog made once with make_group_catalog
-        multiplet_table = make_group_catalog(None, comoving_points=points_3D, transverse_max=transverse_max, los_max=los_max, max_n=100, use_sky_coords=False, **los)
+        multiplet_table = make_group_catalog(None, comoving_points=points_3D, transverse_max=transverse_max, los_max=los_max,
+                                             transverse_min=transverse_min, los_min=los_min,
+                                             max_n=100, use_sky_coords=False, **los)
     else:                          
         multiplet_table = multiplet_catalog
     if len(multiplet_table) < n_batches:
@@ -794,6 +809,8 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
         keep &= multiplet_table['n_group'] <= n_group_max
     multiplet_table = multiplet_table[keep]
     size_tag = '_n' + str(n_group_min) + 'to' + str(n_group_max)   # Defined size_tag
+    link_tag = '' if (transverse_min is None and los_min is None) else \
+        f"_link_t{transverse_min}-{transverse_max}_l{los_min}-{los_max}"   # empty by default
     if len(multiplet_table) < n_batches:
         raise ValueError('%d multiplets left after the size filter, fewer than n_batches=%d' % (len(multiplet_table), n_batches))   # added error message (was just ellipses before)
     if print_info:
@@ -801,7 +818,7 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
     
     if save_info:
         # save a short text file with multiplet info
-        multiplet_info_path = save_directory + '/multiplet_info_'+sim_label+size_tag+'.txt'
+        multiplet_info_path = save_directory + '/multiplet_info_'+sim_label+link_tag+size_tag+'.txt'
         with open(multiplet_info_path, 'w') as f:
             f.write('Number of multiplets: %d\n' % len(multiplet_table))
             f.write('Average number of members: %f\n' % np.mean(multiplet_table['n_group']))
@@ -848,13 +865,16 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
     multiplet_table = multiplet_table[indices]
 
     # hash of every input that changes the batch results, so saved batch files are never reused for other settings
+    hash_items = [points_3D, R_bins, pimax_values, [transverse_max, los_max, float(periodic_boundary)],
+                  box_size if periodic_boundary else [], multiplet_table['center_loc'], multiplet_table['orientation'], multiplet_table['n_group']]
+    if transverse_min is not None or los_min is not None:   # minimums in the hash only when given (default hash unchanged)
+        hash_items.append([-1 if transverse_min is None else transverse_min, -1 if los_min is None else los_min])
     config_hash = hashlib.sha1()
-    for item in [points_3D, R_bins, pimax_values, [transverse_max, los_max, float(periodic_boundary)],
-                 box_size if periodic_boundary else [], multiplet_table['center_loc'], multiplet_table['orientation'], multiplet_table['n_group']]:
+    for item in hash_items:
         config_hash.update(np.ascontiguousarray(item, dtype=float).tobytes())
     config_tag = 'cfg' + config_hash.hexdigest()[:10]
 
-    results_base_path = save_directory + '/MIA_'+str(len(R_bins))+'bins_'+str(round(np.min(R_bins), 3))+'_'+str(round(np.max(R_bins), 3))+'_counts'+str(len(points_3D))+'_sim'+sim_label+'_'+los_tag+size_tag+'_'+config_tag+'_'+str(n_batches)+'batches_' # added size_tag
+    results_base_path = save_directory + '/MIA_'+str(len(R_bins))+'bins_'+str(round(np.min(R_bins), 3))+'_'+str(round(np.max(R_bins), 3))+'_counts'+str(len(points_3D))+'_sim'+sim_label+'_'+los_tag+link_tag+size_tag+'_'+config_tag+'_'+str(n_batches)+'batches_' # added size_tag
     print('Results base path:', results_base_path)
 
     batch_specs = []
@@ -916,6 +936,9 @@ def get_MIA_from3D(points_3D, save_directory, R_bins = np.logspace(np.log10(5), 
         results.meta['LOSOBSX'], results.meta['LOSOBSY'], results.meta['LOSOBSZ'] = [float(v) for v in los['los_location']]
     results.meta['NGMIN'] = n_group_min # size range in the header
     results.meta['NGMAX'] = -1 if n_group_max is None else n_group_max # -1 = no upper limit
+    results.meta['TMAX'], results.meta['LMAX'] = transverse_max, los_max
+    results.meta['TMIN'] = -1 if transverse_min is None else transverse_min   # -1 = no minimum
+    results.meta['LMIN'] = -1 if los_min is None else los_min
     results.meta['CFGHASH'] = config_tag
     if periodic_boundary:
         results.meta['BOXX'], results.meta['BOXY'], results.meta['BOXZ'] = [float(v) for v in box_size]
